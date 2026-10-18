@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pymupdf
 
-RED = (0.86, 0.1, 0.1)
-COLORS = {"critical": RED, "warning": (0.93, 0.36, 0.05), "suggestion": (0.85, 0.6, 0.0)}
+# 화면과 같은 심각도 단계: #9b1c1c, #d4483a, #eb9479
+RED = (0.608, 0.11, 0.11)
+COLORS = {"critical": RED, "warning": (0.831, 0.282, 0.227), "suggestion": (0.922, 0.58, 0.475)}
 WIDTHS = {"critical": 3.0, "warning": 2.2, "suggestion": 1.6}
 LABELS = {"critical": "치명", "warning": "주의", "suggestion": "제안"}
 NOTE_PAGE = (595, 842)  # A4 (pt)
@@ -110,7 +111,8 @@ def annotated_pdf(meta: dict, doc_path: Path, result: dict) -> bytes:
             annot.update()
             key = tuple(round(issue["box"][k], 2) for k in ("x", "y", "w", "h"))
             same_box[key] = same_box.get(key, -1) + 1
-            _badge(page, rect, issue["n"], color, same_box[key])
+            _badge(page, rect, issue["n"], color, same_box[key],
+                   text_color=(0.04, 0.04, 0.04) if issue["severity"] == "suggestion" else (1, 1, 1))
         if rpage["issues"]:
             w.new_page()
             w.text(f"페이지 {rpage['page']} 메모", size=15, gap=8)
@@ -132,7 +134,7 @@ def _memo(issue: dict) -> str:
     return "\n".join(parts)
 
 
-def _badge(page: pymupdf.Page, rect: pymupdf.Rect, n: int, color, slot: int = 0) -> None:
+def _badge(page: pymupdf.Page, rect: pymupdf.Rect, n: int, color, slot: int = 0, text_color=(1, 1, 1)) -> None:
     # 박스 왼쪽 바깥에 두어 위아래로 붙은 박스끼리 배지가 겹치지 않게 한다.
     # 같은 박스를 가리키는 지적이 여럿이면(slot) 박스 위쪽 가장자리를 따라 나란히 놓는다.
     r = 9
@@ -145,4 +147,4 @@ def _badge(page: pymupdf.Page, rect: pymupdf.Rect, n: int, color, slot: int = 0)
     label = str(n)
     size = 10 if n < 100 else 8
     tw = _FONT.text_length(label, fontsize=size)
-    page.insert_text((cx - tw / 2, cy + size * 0.36), label, fontname="kr", fontsize=size, color=(1, 1, 1))
+    page.insert_text((cx - tw / 2, cy + size * 0.36), label, fontname="kr", fontsize=size, color=text_color)

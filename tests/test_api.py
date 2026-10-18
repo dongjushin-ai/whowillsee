@@ -89,3 +89,23 @@ def test_rejects_bad_input(client, tmp_path):
     assert client.post("/api/documents").status_code == 400
     assert client.get("/api/documents/..%2F..%2Fetc").status_code == 404
     assert client.post("/api/documents/nope/analyze", json={}).status_code == 404
+
+
+def test_dashboard_stats(client, samples):
+    empty = client.get("/api/stats").json()
+    assert empty["totals"]["analyses"] == 0 and empty["totals"]["avg_score"] is None
+
+    with open(samples / "sample_briefing.pdf", "rb") as f:
+        doc = client.post("/api/documents", files={"file": ("a.pdf", f, "application/pdf")}).json()
+    job = client.post(f"/api/documents/{doc['id']}/analyze",
+                      json={"persona_ids": ["general-citizen", "domain-expert"]}).json()
+    _wait(client, job["id"])
+
+    s = client.get("/api/stats").json()
+    assert s["totals"]["documents"] == 1 and s["totals"]["analyses"] == 2
+    assert s["totals"]["issues"] == s["totals"]["critical"] + s["totals"]["warning"] + s["totals"]["suggestion"]
+    names = [p["name"] for p in s["personas"]]
+    assert names[0] == "일반 시민"  # 평균 점수가 낮은 순
+    assert s["categories"][0]["total"] >= s["categories"][-1]["total"]
+    assert set(s["matrix"]["cells"][doc["id"]]) == {"general-citizen", "domain-expert"}
+    assert len(s["recent"]) == 2

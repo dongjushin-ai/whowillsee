@@ -598,6 +598,135 @@ function bind() {
   }
 })();
 
-// ------------------------------------------------------------------ 대시보드 (Step 10에서 구현)
+// ------------------------------------------------------------------ 대시보드
 
-async function loadDashboard() {}
+const SEQ = ["var(--seq-1)", "var(--seq-2)", "var(--seq-3)", "var(--seq-4)", "var(--seq-5)"];
+const SEV_COLOR = { critical: "var(--critical)", warning: "var(--warning)", suggestion: "var(--suggestion)" };
+
+function seqStep(score) {
+  return Math.min(4, Math.floor(score / 20));
+}
+
+function bindTip(node, html) {
+  const tip = $("#tooltip");
+  node.addEventListener("mousemove", (e) => {
+    tip.replaceChildren(...html());
+    tip.hidden = false;
+    const x = Math.min(e.clientX + 14, window.innerWidth - tip.offsetWidth - 8);
+    const y = Math.min(e.clientY + 14, window.innerHeight - tip.offsetHeight - 8);
+    tip.style.left = `${x}px`;
+    tip.style.top = `${y}px`;
+  });
+  node.addEventListener("mouseleave", () => (tip.hidden = true));
+  return node;
+}
+
+async function loadDashboard() {
+  const box = $("#dashboard");
+  let d;
+  try {
+    d = await api("/api/stats");
+  } catch (err) {
+    box.replaceChildren(el("div", { class: "dash-empty" }, `불러오기 실패: ${err.message}`));
+    return;
+  }
+  const t = d.totals;
+  const head = el("div", { class: "dash-head" },
+    el("h1", {}, "대시보드"),
+    el("span", { class: "muted" }, state.status?.mode === "ai" ? `분석 엔진: ${state.status.engine}` : "데모 모드 (AI 미연결)"));
+  if (!t.analyses) {
+    box.replaceChildren(head, el("div", { class: "card dash-empty" },
+      el("p", {}, "아직 분석한 자료가 없습니다."),
+      el("a", { class: "btn primary", href: "#analyze" }, "자료 분석하러 가기")));
+    return;
+  }
+  box.replaceChildren(
+    head,
+    el("div", { class: "kpis" },
+      kpi("분석한 자료", t.documents, `분석 ${t.analyses}회`),
+      kpi("평균 전달력", t.avg_score, "100점 만점, 모든 청중 평균"),
+      kpi("발견한 지적", t.issues, null, ["critical", "warning", "suggestion"].map((s) => el("span", { class: `pill ${s}` }, `${SEV[s]} ${t[s]}`))),
+      kpi("가장 어려워한 청중", d.personas[0] ? `${d.personas[0].icon} ${d.personas[0].avg_score}` : "–", d.personas[0]?.name || ""),
+    ),
+    el("div", { class: "dash-grid" },
+      el("div", { class: "card" },
+        el("h2", {}, "청중별 평균 전달력"),
+        el("div", { class: "desc" }, "점수가 낮을수록 그 청중에게 자료가 잘 전달되지 않습니다."),
+        personaBars(d.personas)),
+      el("div", { class: "card" },
+        el("h2", {}, "자주 나온 문제 유형"),
+        el("div", { class: "desc" }, "모든 분석의 지적사항을 유형과 심각도로 묶었습니다."),
+        el("div", { class: "legend" }, ...["critical", "warning", "suggestion"].map((s) =>
+          el("span", {}, el("i", { style: `background:${SEV_COLOR[s]}` }), SEV[s]))),
+        categoryBars(d.categories)),
+    ),
+    el("div", { class: "card", style: "margin-bottom:16px" },
+      el("h2", {}, "자료 × 청중 점수표"),
+      el("div", { class: "desc" }, "칸을 누르면 그 결과로 이동합니다. 최근 자료 12개까지 표시합니다."),
+      el("div", { class: "ramp-legend" }, "0", ...SEQ.map((c) => el("i", { style: `background:${c}` })), "100"),
+      heatTable(d.matrix)),
+    el("div", { class: "card" },
+      el("h2", {}, "최근 분석"),
+      el("div", { class: "recent" }, ...d.recent.map((r) =>
+        el("div", { class: "recent-row", onclick: () => goToResult(r.doc_id, r.persona_id) },
+          el("span", { class: "fn", title: r.filename }, `${r.filename}`, el("span", { class: "muted" }, ` · ${r.icon} ${r.persona_name}`)),
+          el("span", { class: "muted" }, `${r.created_at.slice(5, 16)}`),
+          el("span", { class: "score" }, r.score))))),
+  );
+}
+
+function kpi(label, value, sub, subNodes) {
+  return el("div", { class: "kpi" },
+    el("div", { class: "label" }, label),
+    el("div", { class: "value" }, value ?? "–"),
+    sub || subNodes ? el("div", { class: "sub" }, sub, subNodes) : null);
+}
+
+function personaBars(rows) {
+  return el("div", { class: "hbar-chart" },
+    ...rows.flatMap((p) => [
+      el("div", { class: "hbar-label", title: p.name }, `${p.icon} ${p.name}`),
+      el("div", { class: "hbar-track" },
+        bindTip(el("div", { class: "hbar", style: `width:${Math.max(p.avg_score, 1)}%` },
+          el("div", { class: "seg", style: "flex:1;background:var(--series-1)" })),
+        () => [el("b", {}, `${p.icon} ${p.name}`), el("br"), `평균 ${p.avg_score}점 · 분석 ${p.count}회`]),
+        el("span", { class: "hbar-value" }, p.avg_score)),
+    ]),
+    el("div", { class: "hbar-axis" }, ...[0, 25, 50, 75, 100].map((v) => el("span", {}, v))));
+}
+
+function categoryBars(rows) {
+  const max = Math.max(1, ...rows.map((r) => r.total));
+  return el("div", { class: "hbar-chart" },
+    ...rows.flatMap((c) => [
+      el("div", { class: "hbar-label", title: c.category }, c.category),
+      el("div", { class: "hbar-track", style: "background-image:none" },
+        el("div", { class: "hbar", style: `width:${(c.total / max) * 88}%` },
+          ...["critical", "warning", "suggestion"].filter((s) => c[s] > 0).map((s) =>
+            bindTip(el("div", { class: "seg", style: `flex:${c[s]};background:${SEV_COLOR[s]}` }),
+              () => [el("b", {}, c.category), el("br"), `${SEV[s]} ${c[s]}건 / 전체 ${c.total}건`]))),
+        el("span", { class: "hbar-value" }, c.total)),
+    ]));
+}
+
+function heatTable(m) {
+  return el("div", { class: "heat-wrap" }, el("table", { class: "heat" },
+    el("thead", {}, el("tr", {}, el("th", {}, "자료"), ...m.personas.map((p) => el("th", { title: p.name }, `${p.icon} ${p.name}`)))),
+    el("tbody", {}, ...m.docs.map((doc) => el("tr", {},
+      el("th", { class: "doc", title: doc.filename }, doc.version > 1 ? `${doc.filename} (v${doc.version})` : doc.filename),
+      ...m.personas.map((p) => {
+        const score = m.cells[doc.id]?.[p.id];
+        if (score === undefined) return el("td", { class: "none" }, "–");
+        const step = seqStep(score);
+        return bindTip(el("td", {
+          style: `background:${SEQ[step]};color:${step >= 3 ? "#fff" : "#0b0b0b"}`,
+          onclick: () => goToResult(doc.id, p.id),
+        }, score), () => [el("b", {}, doc.filename), el("br"), `${p.icon} ${p.name}: ${score}점`]);
+      }))))));
+}
+
+async function goToResult(docId, personaId) {
+  $("#tooltip").hidden = true;
+  location.hash = "#analyze";
+  await openDoc(docId, personaId);
+}

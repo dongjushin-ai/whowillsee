@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import analyzer, converter, exporter, personas, providers, storage
+from . import analyzer, converter, exporter, personas, providers, stats, storage
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -53,6 +53,11 @@ def status():
         "office": converter.soffice_path() is not None,
         "formats": sorted(converter.SUPPORTED_EXTS),
     }
+
+
+@app.get("/api/stats")
+def get_stats():
+    return stats.dashboard()
 
 
 # ------------------------------------------------------------------ AI 연결 설정
