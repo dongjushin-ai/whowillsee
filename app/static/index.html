@@ -6,6 +6,10 @@
   <title>WhoWillSee</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>👁️</text></svg>">
   <link rel="stylesheet" href="/static/style.css">
+  <script>
+    // 첫 화면이 그려지기 전에 저장된 테마를 적용해 깜빡임을 막는다
+    try { const t = localStorage.getItem("whowillsee.theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (_) {}
+  </script>
 </head>
 <body>
 <header class="topbar">
@@ -15,7 +19,10 @@
     <a href="#dashboard" data-view="dashboard">대시보드</a>
     <a href="#settings" data-view="settings">AI 연결</a>
   </nav>
-  <a id="mode-badge" class="badge" href="#settings"></a>
+  <div class="top-right">
+    <button type="button" id="theme-btn" class="theme-btn">🌓 자동</button>
+    <a id="mode-badge" class="badge" href="#settings"></a>
+  </div>
 </header>
 
 <div id="ai-banner" class="ai-banner" hidden>

@@ -77,6 +77,28 @@ async function loadStatus() {
   $("#ai-banner").hidden = s.mode === "ai" || location.hash === "#settings";
 }
 
+// ------------------------------------------------------------------ 테마 (자동 / 라이트 / 다크)
+
+const THEMES = ["auto", "light", "dark"];
+const THEME_LABEL = { auto: "🌓 자동", light: "☀️ 라이트", dark: "🌙 다크" };
+
+function currentTheme() {
+  try { return localStorage.getItem("whowillsee.theme") || "auto"; } catch (_) { return "auto"; }
+}
+
+function applyTheme(theme) {
+  if (theme === "auto") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  $("#theme-btn").textContent = THEME_LABEL[theme];
+  $("#theme-btn").title = "화면 테마 바꾸기 (자동은 시스템 설정을 따릅니다)";
+}
+
+function cycleTheme() {
+  const next = THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length];
+  try { localStorage.setItem("whowillsee.theme", next); } catch (_) { /* 저장 못 해도 이번 화면에는 적용 */ }
+  applyTheme(next);
+}
+
 // ------------------------------------------------------------------ 화면 전환
 
 const VIEWS = ["analyze", "dashboard", "settings"];
@@ -729,8 +751,8 @@ function renderOverall() {
   const color = scoreColor(o.score);
   fill(box, 
     el("div", {},
-      el("div", { class: "score-ring", style: `background: conic-gradient(${color} ${o.score * 3.6}deg, #eceef2 0)` },
-        el("div", { style: "background:#fff;border-radius:50%;width:84px;height:84px;display:grid;place-items:center;color:" + color },
+      el("div", { class: "score-ring", style: `background: conic-gradient(${color} ${o.score * 3.6}deg, var(--line) 0)` },
+        el("div", { class: "hole", style: `color:${color}` },
           el("div", {}, o.score, el("small", {}, "전달력")))),
       el("div", { class: "counts" }, ...["critical", "warning", "suggestion"].map((s) => el("span", { class: `pill ${s}` }, `${SEV[s]} ${o.counts[s]}`)))),
     el("div", {},
@@ -935,6 +957,8 @@ function bind() {
   dz.addEventListener("drop", (e) => { if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]); });
 
   window.addEventListener("hashchange", route);
+  applyTheme(currentTheme());
+  $("#theme-btn").addEventListener("click", cycleTheme);
   $("#settings-form").addEventListener("change", (e) => {
     syncSettingsForm(e.target.id === "preset-select");
   });
@@ -1097,7 +1121,7 @@ function heatTable(m) {
         if (score === undefined) return el("td", { class: "none" }, "–");
         const step = seqStep(score);
         return bindTip(el("td", {
-          style: `background:${SEQ[step]};color:${step >= 3 ? "#fff" : "#0b0b0b"}`,
+          class: `s${step + 1}`,
           onclick: () => goToResult(doc.id, p.id),
         }, score), () => [el("b", {}, doc.filename), el("br"), `${p.icon} ${p.name}: ${score}점`]);
       }))))));

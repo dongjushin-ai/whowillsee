@@ -10,6 +10,15 @@ SEV = {"critical": "치명", "warning": "주의", "suggestion": "제안"}
 CSS = """
 :root { --text:#1d2330; --muted:#6b7280; --line:#e3e6eb; --bg:#f5f6f8; --panel:#fff; --accent:#2348c7;
   --critical:#9b1c1c; --warning:#d4483a; --suggestion:#eb9479; }
+@media (prefers-color-scheme: dark) {
+  :root { color-scheme: dark; --text:#f0efec; --muted:#a3a29b; --line:#2e3036; --bg:#111318; --panel:#1a1b1f; --accent:#8aa4ff; }
+  .memo .who, .tag { background: #1f2a4d !important; }
+  /* 메모 왼쪽 띠(화면 요소)는 다크 표면용 단계 */
+  .memo { border-left-color: #f6a091; } .memo.warning { border-left-color: #cf5244; } .memo.suggestion { border-left-color: #8f3329; }
+  .pill::before { background: #f6a091; } .pill.warning::before { background: #cf5244; } .pill.suggestion::before { background: #8f3329; }
+}
+/* 문서 위 박스는 흰 슬라이드 위에 그려지므로 테마와 관계없이 라이트 단계 */
+.box { --critical:#9b1c1c; --warning:#d4483a; --suggestion:#eb9479; }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--text);
   font:14px/1.6 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif; }
