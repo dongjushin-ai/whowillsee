@@ -549,6 +549,9 @@ async function startAnalysis() {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
     pollJob(job.id, state.doc.id, state.audience);
+    try {
+      localStorage.setItem("whowillsee.job", JSON.stringify({ id: job.id, doc: state.doc.id, audience: state.audience }));
+    } catch (_) { /* 저장소를 못 써도 동작에는 문제없음 */ }
   } catch (err) {
     toast(`분석 시작 실패: ${err.message}`);
     $("#analyze-btn").disabled = false;
@@ -570,6 +573,7 @@ function pollJob(jobId, docId, audienceId = null) {
     setProgress(job.items);
     if (job.status !== "running") {
       clearInterval(state.polling);
+      try { localStorage.removeItem("whowillsee.job"); } catch (_) { /* 무시 */ }
       $("#analyze-btn").disabled = false;
       const firstDone = job.items.find((i) => i.status === "done");
       if (state.doc?.id === docId) await openDoc(docId, audienceId ? null : firstDone?.persona_id, audienceId);
@@ -593,6 +597,19 @@ function setProgress(items) {
       i.status === "error" ? el("div", { class: "err" }, i.error) : el("div", { class: "bar" }, el("i", { style: `width:${Math.max(pct, 4)}%` })),
     );
   }));
+}
+
+async function resumeJob() {
+  // 새로고침 전에 진행 중이던 분석이 있으면 이어서 진행 상황을 보여준다
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem("whowillsee.job") || "null"); } catch (_) { /* 무시 */ }
+  if (!saved?.id) return;
+  try {
+    await openDoc(saved.doc);
+    pollJob(saved.id, saved.doc, saved.audience);
+  } catch (_) {
+    try { localStorage.removeItem("whowillsee.job"); } catch (__) { /* 무시 */ }
+  }
 }
 
 // ------------------------------------------------------------------ 발표 대본
@@ -836,6 +853,7 @@ function renderExports() {
     : `/api/documents/${state.doc.id}/results/${state.activePersona}`;
   fill(box, 
     el("a", { class: "btn", href: `${base}/export.pdf` }, "⬇ 주석 PDF"),
+    el("a", { class: "btn", href: `${base}/export.html`, title: "앱 없이 브라우저로 열어보는 공유용 파일" }, "⬇ 공유용 HTML"),
     el("a", { class: "btn", href: `${base}/export.json` }, "⬇ JSON"),
   );
 }
@@ -938,6 +956,7 @@ function bind() {
   try {
     await Promise.all([loadStatus(), loadPersonas(), loadDocs()]);
     await loadAudiences();
+    resumeJob();
     route();
   } catch (err) {
     toast(`서버 연결 실패: ${err.message}`);

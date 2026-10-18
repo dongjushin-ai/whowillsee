@@ -9,23 +9,61 @@ import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (analyzer, audiences, compare, converter, exporter, persona_gen, personas, providers, script,
-               stats, storage)
+from . import (analyzer, audiences, compare, converter, exporter, persona_gen, personas, providers, report_html,
+               script, stats, storage)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
-app = FastAPI(title="WhoWillSee", version="1.0")
 _executor = ThreadPoolExecutor(max_workers=4)
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
+INTERRUPTED = "서버가 다시 시작되어 분석이 중단되었습니다. 다시 분석하세요."
+
+
+def _jobs_dir() -> Path:
+    path = storage.DATA_DIR / "jobs"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _save_job(job: dict) -> None:
+    """작업 상태를 파일에도 남겨 서버를 재시작해도 결과를 확인할 수 있게 한다."""
+    storage.write_json(_jobs_dir() / f"{job['id']}.json", job)
+
+
+def recover_jobs() -> int:
+    """재시작 전에 끝나지 않은 작업을 '중단됨'으로 표시한다. 고친 작업 수를 돌려준다."""
+    fixed = 0
+    for path in _jobs_dir().glob("*.json"):
+        job = storage.read_json(path)
+        if not job or job.get("status") != "running":
+            continue
+        for item in job["items"].values():
+            if item["status"] in ("queued", "running"):
+                item["status"], item["error"] = "error", INTERRUPTED
+        states = {i["status"] for i in job["items"].values()}
+        job["status"] = "error" if states == {"error"} else "partial"
+        storage.write_json(path, job)
+        fixed += 1
+    return fixed
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    recover_jobs()
+    yield
+
+
+app = FastAPI(title="WhoWillSee", version="1.0", lifespan=lifespan)
 
 
 def _id_or_404(value: str) -> str:
@@ -317,6 +355,7 @@ def start_analysis(doc_id: str, req: AnalyzeRequest):
                             "error": None} for p in selected}}
     with _jobs_lock:
         _jobs[job_id] = job
+        _save_job(job)
     for persona in selected:
         _executor.submit(_run_analysis, job, meta, persona, context)
     return _job_view(job)
@@ -343,6 +382,7 @@ def _run_analysis(job: dict, meta: dict, persona: personas.Persona, context: str
         states = {i["status"] for i in job["items"].values()}
         if states <= {"done", "error"}:
             job["status"] = "done" if states == {"done"} else ("error" if states == {"error"} else "partial")
+        _save_job(job)
 
 
 def _job_view(job: dict) -> dict:
@@ -351,7 +391,7 @@ def _job_view(job: dict) -> dict:
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str):
-    job = _jobs.get(job_id)
+    job = _jobs.get(job_id) or storage.read_json(_jobs_dir() / f"{_id_or_404(job_id)}.json")
     if not job:
         raise HTTPException(404, "작업을 찾을 수 없습니다.")
     return _job_view(job)
@@ -452,6 +492,23 @@ def _pdf_response(meta: dict, doc_id: str, result: dict, name: str) -> Response:
 def export_pdf(doc_id: str, persona_id: str):
     meta, result = _doc_meta(doc_id), _result(doc_id, persona_id)
     return _pdf_response(meta, doc_id, result, f"whowillsee_{doc_id}_{persona_id}.pdf")
+
+
+@app.get("/api/documents/{doc_id}/results/{persona_id}/export.html")
+def export_html(doc_id: str, persona_id: str):
+    meta, result = _doc_meta(doc_id), _result(doc_id, persona_id)
+    return _html_response(meta, doc_id, result, f"whowillsee_{doc_id}_{persona_id}.html")
+
+
+@app.get("/api/documents/{doc_id}/audiences/{audience_id}/export.html")
+def export_audience_html(doc_id: str, audience_id: str):
+    meta, result = _doc_meta(doc_id), _audience_result(doc_id, audience_id)
+    return _html_response(meta, doc_id, result, f"whowillsee_{doc_id}_{audience_id}.html")
+
+
+def _html_response(meta: dict, doc_id: str, result: dict, name: str) -> HTMLResponse:
+    return HTMLResponse(report_html.render(meta, storage.doc_dir(doc_id), result),
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.get("/api/documents/{doc_id}/results/{persona_id}/export.json")
