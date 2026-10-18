@@ -16,8 +16,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (analyzer, audiences, compare, converter, exporter, persona_gen, personas, providers, stats,
-               storage)
+from . import (analyzer, audiences, compare, converter, exporter, persona_gen, personas, providers, script,
+               stats, storage)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -221,6 +221,7 @@ def upload_document(file: UploadFile | None = File(default=None), url: str = For
         "version": parent.get("version", 1) + 1 if parent else 1,
         "pages": [p.to_dict() for p in pages],
     }
+    meta["script"] = script.initial(meta["pages"])  # PPTX 발표자 노트가 있으면 대본으로
     storage.write_json(out / "meta.json", meta)
     return meta
 
@@ -250,6 +251,27 @@ def delete_document(doc_id: str):
     _doc_meta(doc_id)
     shutil.rmtree(storage.doc_dir(doc_id), ignore_errors=True)
     return Response(status_code=204)
+
+
+class ScriptIn(BaseModel):
+    target_minutes: float | None = Field(default=None, gt=0, le=600)
+    pages: dict[str, str] = Field(default_factory=dict)
+
+
+@app.put("/api/documents/{doc_id}/script")
+def save_script(doc_id: str, data: ScriptIn):
+    meta = _doc_meta(doc_id)
+    valid = {str(p["index"]) for p in meta["pages"]}
+    bad = [k for k in data.pages if k not in valid]
+    if bad:
+        raise HTTPException(422, f"없는 페이지 번호입니다: {', '.join(bad)}")
+    if any(len(v) > 20000 for v in data.pages.values()):
+        raise HTTPException(422, "한 페이지 대본은 20,000자까지입니다.")
+    pages = {k: v.strip() for k, v in data.pages.items() if v.strip()}
+    meta["script"] = {"target_minutes": data.target_minutes, "pages": pages} if pages or data.target_minutes else None
+    storage.write_json(storage.doc_dir(doc_id) / "meta.json", meta)
+    return {"script": meta["script"],
+            "timing": script.timing(meta["script"], [p["index"] for p in meta["pages"]])}
 
 
 @app.get("/api/documents/{doc_id}/pages/{index}.png")

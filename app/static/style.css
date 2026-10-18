@@ -326,3 +326,18 @@ dialog h2 { margin-top: 0; }
 .member .share i { display: block; height: 100%; background: var(--series-1); }
 .member b { text-align: right; font-variant-numeric: tabular-nums; }
 .voices { font-size: 12px; margin-bottom: 6px; color: var(--text); background: var(--accent-soft); border-radius: 6px; padding: 4px 8px; }
+
+/* ---------- 발표 대본 ---------- */
+dialog.wide { width: min(900px, 96vw); }
+.script-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+.script-top input { width: 80px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+.script-pages { display: flex; flex-direction: column; gap: 12px; }
+.script-row { display: grid; grid-template-columns: 180px 1fr; gap: 12px; align-items: start; }
+.script-row img { width: 100%; border: 1px solid var(--line); border-radius: 4px; }
+.script-row .label { font-size: 12px; color: var(--muted); margin-bottom: 4px; display: flex; justify-content: space-between; }
+.script-row textarea { min-height: 96px; }
+.timing { font-size: 13px; margin: 0 0 10px; }
+.timing.over { color: var(--critical); font-weight: 700; }
+.page-script { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+.tag-script { font-size: 11px; font-weight: 700; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 0 5px; }
+@media (max-width: 700px) { .script-row { grid-template-columns: 1fr; } .script-row img { max-width: 220px; } }

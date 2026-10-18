@@ -523,6 +523,7 @@ async function openDoc(id, personaId = null, audienceId = null) {
     } catch (_) { /* 이전 버전이 삭제됨 */ }
   }
   renderDocs();
+  updateScriptButton();
   const aud = audienceId || (!personaId && state.activeAudience);
   if (aud && state.docAudiences.some((a) => a.audience_id === aud)) return openAudience(aud);
   const pick = personaId || state.activePersona;
@@ -594,6 +595,69 @@ function setProgress(items) {
   }));
 }
 
+// ------------------------------------------------------------------ 발표 대본
+
+const CHARS_PER_MINUTE = 330; // 서버(app/script.py)와 같은 값
+
+function speakMinutes(text) {
+  return text.replace(/\s/g, "").length / CHARS_PER_MINUTE;
+}
+
+function openScriptDialog() {
+  if (!state.doc) return;
+  const sc = state.doc.script || { target_minutes: null, pages: {} };
+  const form = $("#script-form");
+  form.elements.target_minutes.value = sc.target_minutes ?? "";
+  fill($("#script-pages"), ...state.doc.pages.map((pg) => {
+    const ta = el("textarea", { "data-page": pg.index, placeholder: "이 페이지에서 말할 내용" });
+    ta.value = sc.pages?.[String(pg.index)] || "";
+    const est = el("span", {});
+    const sync = () => {
+      est.textContent = ta.value.trim() ? `약 ${speakMinutes(ta.value).toFixed(1)}분` : "";
+      syncScriptEstimate();
+    };
+    ta.addEventListener("input", sync);
+    setTimeout(sync);
+    return el("div", { class: "script-row" },
+      el("img", { src: `/api/documents/${state.doc.id}/pages/${pg.index}.png`, alt: `페이지 ${pg.index}`, loading: "lazy" }),
+      el("div", {}, el("div", { class: "label" }, el("span", {}, `페이지 ${pg.index}`), est), ta));
+  }));
+  $("#script-dialog").showModal();
+}
+
+function syncScriptEstimate() {
+  const texts = [...document.querySelectorAll("#script-pages textarea")].map((t) => t.value);
+  const total = texts.reduce((a, t) => a + speakMinutes(t), 0);
+  const target = Number($("#script-form").elements.target_minutes.value) || null;
+  const over = target && total > target * 1.1;
+  const out = $("#script-estimate");
+  out.textContent = total ? `예상 발표 시간 ${total.toFixed(1)}분${target ? ` / 목표 ${target}분` : ""}${over ? " · 목표 초과" : ""}` : "";
+  out.style.color = over ? "var(--critical)" : "";
+}
+
+async function saveScript(e) {
+  e.preventDefault();
+  const pages = Object.fromEntries([...document.querySelectorAll("#script-pages textarea")]
+    .map((t) => [t.dataset.page, t.value]));
+  const target = Number($("#script-form").elements.target_minutes.value) || null;
+  try {
+    const r = await api(`/api/documents/${state.doc.id}/script`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target_minutes: target, pages }),
+    });
+    state.doc.script = r.script;
+    $("#script-dialog").close();
+    updateScriptButton();
+    toast("대본을 저장했습니다. '분석 시작'을 누르면 대본도 함께 평가합니다.", 5000);
+  } catch (err) {
+    toast(`저장 실패: ${err.message}`);
+  }
+}
+
+function updateScriptButton() {
+  const n = Object.keys(state.doc?.script?.pages || {}).length;
+  $("#script-btn").textContent = n ? `🎤 발표 대본 (${n}p)` : "🎤 발표 대본";
+}
+
 // ------------------------------------------------------------------ 결과 표시
 
 async function openAudience(audienceId) {
@@ -659,6 +723,9 @@ function renderOverall() {
         el("div", { class: "member" }, el("span", {}, `${m.icon} ${m.name}`),
           el("span", { class: "share", title: `비중 ${m.share}%` }, el("i", { style: `width:${m.share}%` })),
           el("b", {}, m.score))))] : null,
+      o.timing ? el("p", { class: "timing" + (o.timing.over ? " over" : "") },
+        `🎤 예상 발표 시간 ${o.timing.est_minutes}분`, o.timing.target_minutes ? ` / 목표 ${o.timing.target_minutes}분` : "",
+        o.timing.over ? " · 목표 초과" : "", el("span", { class: "muted" }, " (대본 기준)")) : null,
       el("p", { class: "muted" }, `${r.engine ? `분석: ${r.engine}` : "데모 모드(규칙 기반)"} · ${r.created_at}`),
       el("div", { class: "cols" },
         o.top_fixes?.length ? el("div", {}, el("h3", {}, "우선 고칠 것"), el("ol", {}, ...o.top_fixes.map((t) => el("li", {}, t)))) : null,
@@ -703,15 +770,25 @@ function renderPages() {
       el("div", { class: "page-label" }, el("span", {}, `페이지 ${pg.index}`), el("span", {}, rp ? `지적 ${issues.length}건` : "")),
       el("div", { class: "page-wrap" },
         el("img", { src: `/api/documents/${state.doc.id}/pages/${pg.index}.png`, alt: `페이지 ${pg.index}`, loading: "lazy" }),
-        ...issues.map((i) => el("div", {
+        ...issues.filter((i) => i.box).map((i) => el("div", {
           class: `box ${i.severity}`, id: `box-${i.n}`, title: `#${i.n} ${i.title}`,
           style: `left:${i.box.x * 100}%;top:${i.box.y * 100}%;width:${i.box.w * 100}%;height:${i.box.h * 100}%`,
           onmouseenter: () => highlight(i.n, false), onmouseleave: () => highlight(null),
           onclick: () => highlight(i.n, "memo"),
         }, el("span", { class: "num", style: `margin-left:${badgeOffset(i)}px` }, i.n)))),
       rp?.page_comment ? el("div", { class: "page-comment" }, rp.page_comment) : null,
+      scriptLine(pg.index, issues.filter((i) => !i.box).length),
     );
   }));
+}
+
+function scriptLine(index, count) {
+  const text = state.doc.script?.pages?.[String(index)];
+  if (!text && !count) return null;
+  const parts = [];
+  if (text) parts.push(`대본 약 ${speakMinutes(text).toFixed(1)}분`);
+  if (count) parts.push(`대본 지적 ${count}건 (오른쪽 메모)`);
+  return el("div", { class: "page-script" }, "🎤 ", parts.join(" · "));
 }
 
 function renderMemos() {
@@ -725,7 +802,8 @@ function renderMemos() {
     onclick: () => highlight(i.n, "box"),
   },
     el("div", { class: "memo-head" }, el("span", { class: "n" }, `#${i.n}`), el("span", { class: "title" }, i.title)),
-    el("div", { class: "memo-meta" }, `p.${i.page} · ${SEV[i.severity]} · ${i.category}`),
+    el("div", { class: "memo-meta" }, i.target === "script" ? el("span", { class: "tag-script" }, "🎤 대본") : null,
+      `${i.target === "script" ? " " : ""}p.${i.page} · ${SEV[i.severity]} · ${i.category}`),
     i.voices ? el("div", { class: "voices" }, `👥 청중의 ${i.share}%가 지적 · `, i.voices.map((v) => `${v.icon} ${v.name}`).join(", ")) : null,
     el("dl", {},
       el("dt", {}, "왜 문제인가"), el("dd", {}, i.reason),
@@ -742,7 +820,13 @@ function highlight(n, scrollTo) {
   b?.classList.add("hl");
   m?.classList.add("hl");
   if (scrollTo === "memo") m?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  if (scrollTo === "box") b?.scrollIntoView({ behavior: "smooth", block: "center" });
+  if (scrollTo === "box") {
+    if (b) b.scrollIntoView({ behavior: "smooth", block: "center" });
+    else {
+      const page = state.result?.pages.find((p) => p.issues.some((i) => i.n === n))?.page;
+      document.getElementById(`page-${page}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
 }
 
 function renderExports() {
@@ -804,6 +888,10 @@ function bind() {
   $("#persona-form").addEventListener("input", syncRangeOutputs);
   $("#autofill-btn").addEventListener("click", autofillPersona);
   $("#audience-form").addEventListener("submit", saveAudience);
+  $("#script-btn").addEventListener("click", openScriptDialog);
+  $("#script-form").addEventListener("submit", saveScript);
+  $("#script-form").addEventListener("input", syncScriptEstimate);
+  $("#script-cancel").addEventListener("click", () => $("#script-dialog").close());
   $("#audience-cancel").addEventListener("click", () => $("#audience-dialog").close());
   $("#audience-delete").addEventListener("click", deleteAudience);
   $("#autofill-input").addEventListener("keydown", (e) => {

@@ -18,6 +18,9 @@ SLIDES = [
             "■ 기대효과: TCO 23.7% 절감, ROI 312%, MAU 1.8M 달성(YoY +41.2%)",
         ],
         "footnote": "※ 상세 산출근거는 별첨 7-3 참조 (본 자료 미포함)",
+        "notes": "안녕하십니까. 금번 사업은 디지털 트윈 기반 SoS 아키텍처를 내재화하여 데이터 레이크하우스의 "
+                 "interoperability를 확보하고 KPI 정합성을 제고하는 것을 목표로 하고 있으며 이를 통해 TCO를 23.7% 절감하고 "
+                 "ROI 312%를 달성할 것으로 기대하고 있습니다.",
     },
     {
         "title": "추진 현황 및 향후 일정",
@@ -28,6 +31,7 @@ SLIDES = [
             "2단계(’25.Q2~): 전면 확산 — 시민 체감형 서비스 발굴(미정)",
         ],
         "footnote": "문의: 데이터정책과 (내선 미기재)",
+        "notes": "일정은 화면과 같습니다. 2단계 세부 내용은 추후 별도로 안내드리겠습니다.",
     },
 ]
 
@@ -91,6 +95,8 @@ def make_pptx(path: Path) -> Path | None:
         foot = s.shapes.add_textbox(Inches(0.6), Inches(6.9), Inches(12), Inches(0.4)).text_frame
         foot.text = slide["footnote"]
         foot.paragraphs[0].font.size = Pt(8)
+        if slide.get("notes"):
+            s.notes_slide.notes_text_frame.text = slide["notes"]
     prs.save(path)
     return path
 

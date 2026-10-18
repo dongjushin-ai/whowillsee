@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import providers
+from . import script as scripts
 from .personas import Persona
 
 PAGES_PER_CALL = int(os.environ.get("WHOWILLSEE_PAGES_PER_CALL", "6"))
@@ -37,21 +38,23 @@ def analyze(doc: dict, doc_path: Path, persona: Persona, context: str = "",
     """문서 메타(doc)와 페르소나로 분석 결과 dict 를 만든다."""
     progress = progress or (lambda done, total: None)
     pages = doc["pages"]
+    script = doc.get("script")
     try:
         provider = providers.get_provider()
     except providers.ProviderError as exc:
         raise AnalysisError(str(exc)) from exc
     if provider:
-        raw = _analyze_with_ai(provider, pages, doc_path, persona, context, progress)
+        raw = _analyze_with_ai(provider, pages, doc_path, persona, context, progress, script)
         mode, engine = "ai", provider.engine
     else:
-        raw, mode, engine = _analyze_demo(pages, persona), "demo", None
+        raw, mode, engine = _analyze_demo(pages, persona, script), "demo", None
         progress(1, 1)
-    return finalize(raw, pages, persona, mode, engine, context)
+    timing = scripts.timing(script, [p["index"] for p in pages])
+    return finalize(raw, pages, persona, mode, engine, context, timing)
 
 
 def finalize(raw: dict, pages: list[dict], persona: Persona, mode: str,
-             engine: str | None, context: str) -> dict:
+             engine: str | None, context: str, timing: dict | None = None) -> dict:
     """모델/휴리스틱의 원시 출력에 정확한 박스 좌표와 일련번호를 붙인다."""
     by_page = {p["index"]: p for p in pages}
     out_pages, counter = [], 0
@@ -61,11 +64,14 @@ def finalize(raw: dict, pages: list[dict], persona: Persona, mode: str,
         issues = []
         for issue in rp.get("issues", []):
             severity = issue.get("severity") if issue.get("severity") in SEVERITIES else "warning"
-            box, used = resolve_box(issue, by_page[index].get("blocks", []))
+            target = "script" if issue.get("target") == "script" else "slide"
+            # 대본 지적은 화면 위치가 없다
+            box, used = (None, []) if target == "script" else resolve_box(issue, by_page[index].get("blocks", []))
             counter += 1
             issues.append({
                 "n": counter,
                 "page": index,
+                "target": target,
                 "box": box,
                 "block_ids": used,
                 "severity": severity,
@@ -76,7 +82,8 @@ def finalize(raw: dict, pages: list[dict], persona: Persona, mode: str,
                 "persona_reaction": (issue.get("persona_reaction") or "").strip(),
             })
         order = {s: i for i, s in enumerate(SEVERITIES)}
-        issues.sort(key=lambda i: (order[i["severity"]], i["box"]["y"], i["box"]["x"]))
+        issues.sort(key=lambda i: (i["target"] == "script", order[i["severity"]],
+                                   i["box"]["y"] if i["box"] else 0, i["box"]["x"] if i["box"] else 0))
         out_pages.append({"page": index, "page_comment": rp.get("page_comment", ""), "issues": issues})
     # 정렬 후 번호를 다시 매겨 화면 순서와 맞춘다
     n = 0
@@ -99,6 +106,7 @@ def finalize(raw: dict, pages: list[dict], persona: Persona, mode: str,
             "strengths": list(overall.get("strengths") or []),
             "top_fixes": list(overall.get("top_fixes") or []),
             "counts": counts,
+            "timing": timing,
         },
         "pages": out_pages,
     }
@@ -154,6 +162,7 @@ ISSUE_SCHEMA = {
             "required": ["x", "y", "w", "h"],
             "additionalProperties": False,
         },
+        "target": {"type": "string", "enum": ["slide", "script"]},
         "severity": {"type": "string", "enum": SEVERITIES},
         "category": {"type": "string", "enum": CATEGORIES},
         "title": {"type": "string"},
@@ -161,7 +170,7 @@ ISSUE_SCHEMA = {
         "suggestion": {"type": "string"},
         "persona_reaction": {"type": "string"},
     },
-    "required": ["block_ids", "bbox", "severity", "category", "title", "reason",
+    "required": ["block_ids", "bbox", "target", "severity", "category", "title", "reason",
                  "suggestion", "persona_reaction"],
     "additionalProperties": False,
 }
@@ -216,6 +225,15 @@ SYSTEM_PROMPT = """당신은 발표·브리핑 자료를 특정 청중(페르소
 - 그림·차트·표·여백처럼 블록이 없거나 블록 일부만 해당되는 경우 block_ids 는 비우고 bbox 로 위치를 지정하세요.
 - bbox 는 항상 채웁니다. 페이지 이미지 기준 좌상단 (0,0), 우하단 (1,1) 인 정규화 좌표 x, y, w, h 입니다.
 - 페이지 전체에 해당하는 문제라면 bbox 를 {x:0,y:0,w:1,h:1} 로 하세요.
+- 화면(슬라이드)에 대한 지적은 target 을 "slide" 로 합니다.
+
+발표 대본
+- 일부 페이지에는 발표자가 그 페이지를 띄워 놓고 말할 대본이 함께 주어집니다.
+- 페르소나가 그 말을 "귀로 듣는다"고 생각하고 평가하세요: 한 번에 따라가기 어려운 긴 문장, 들어서는 모르는 용어·약어,
+  화면과 말이 어긋나는 부분, 페르소나가 궁금해할 핵심을 말하지 않는 부분, 톤 문제 등.
+- 대본에 대한 지적은 target 을 "script" 로 하고 block_ids 는 비우고 bbox 는 {x:0,y:0,w:0,h:0} 로 하세요.
+  suggestion 에는 고쳐 말할 문장 예시를 쓰세요.
+- 대본이 없는 페이지에는 대본 지적을 만들지 마세요.
 
 출력
 - 모든 문장은 한국어로 씁니다.
@@ -224,7 +242,7 @@ SYSTEM_PROMPT = """당신은 발표·브리핑 자료를 특정 청중(페르소
 - overall.first_impression 은 페르소나가 처음 10초 동안 받는 인상, summary 는 종합 평가, strengths 는 잘된 점, top_fixes 는 가장 먼저 고칠 3~5가지입니다."""
 
 
-def _page_content(page: dict, doc_path: Path) -> list[dict]:
+def _page_content(page: dict, doc_path: Path, script_text: str = "") -> list[dict]:
     lines = [f"=== 페이지 {page['index']} ==="]
     blocks = page.get("blocks") or []
     if blocks:
@@ -237,6 +255,9 @@ def _page_content(page: dict, doc_path: Path) -> list[dict]:
             lines.append(f"[B{b['id']}] ({b['x']:.3f}, {b['y']:.3f}, {b['w']:.3f}, {b['h']:.3f}{size}) {text}")
     else:
         lines.append("텍스트 블록 없음 — 이미지에서 직접 위치를 bbox 로 지정하세요.")
+    if script_text:
+        lines.append("발표 대본 (이 페이지를 띄워 놓고 말할 내용):")
+        lines.append(script_text[:4000])
     data = base64.standard_b64encode((doc_path / page["image"]).read_bytes()).decode()
     return [
         {"type": "text", "text": "\n".join(lines)},
@@ -251,27 +272,32 @@ def _call(provider, content: list[dict], schema: dict, max_tokens: int = 32000) 
         raise AnalysisError(str(exc)) from exc
 
 
-def _intro(persona: Persona, context: str, page_nums: list[int], total: int) -> str:
+def _intro(persona: Persona, context: str, page_nums: list[int], total: int, timing: dict | None = None) -> str:
     parts = ["## 페르소나", persona.to_prompt()]
     if context.strip():
         parts += ["", "## 자료 사용 상황 (발표자가 입력)", context.strip()]
+    if timing:
+        target = f", 목표 {timing['target_minutes']}분" if timing.get("target_minutes") else ""
+        parts += ["", f"## 발표 시간\n대본 기준 예상 {timing['est_minutes']}분{target}. "
+                      "목표를 넘으면 무엇을 줄일지 페르소나 관점에서 지적하세요."]
     if len(page_nums) < total:
         parts += ["", f"## 범위\n전체 {total}페이지 중 {page_nums[0]}~{page_nums[-1]}페이지입니다. "
                       "overall 은 이 범위 기준으로 작성하세요."]
-    parts += ["", "아래 페이지들을 이 페르소나의 관점에서 검토하세요."]
+    parts += ["", "아래 페이지들을 이 페르소나의 관점에서 검토하세요. 대본이 있는 페이지는 대본도 함께 검토하세요."]
     return "\n".join(parts)
 
 
 def _analyze_with_ai(client, pages: list[dict], doc_path: Path, persona: Persona, context: str,
-                     progress: ProgressFn) -> dict:
+                     progress: ProgressFn, script: dict | None = None) -> dict:
     batches = [pages[i:i + PAGES_PER_CALL] for i in range(0, len(pages), PAGES_PER_CALL)]
+    timing = scripts.timing(script, [p["index"] for p in pages])
     total_steps = len(batches) + (1 if len(batches) > 1 else 0)
     merged_pages, overalls = [], []
     for done, batch in enumerate(batches):
         progress(done, total_steps)
-        content = [{"type": "text", "text": _intro(persona, context, [p["index"] for p in batch], len(pages))}]
+        content = [{"type": "text", "text": _intro(persona, context, [p["index"] for p in batch], len(pages), timing)}]
         for page in batch:
-            content += _page_content(page, doc_path)
+            content += _page_content(page, doc_path, scripts.page_text(script, page["index"]))
         result = _call(client, content, RESULT_SCHEMA)
         merged_pages += result.get("pages", [])
         overalls.append(result.get("overall", {}))
@@ -311,7 +337,7 @@ ACRONYM = re.compile(r"\b[A-Z][A-Za-z0-9/+-]*[A-Z0-9]\b")
 NUMBER = re.compile(r"\d[\d,.]*\s*%?")
 
 
-def _analyze_demo(pages: list[dict], persona: Persona) -> dict:
+def _analyze_demo(pages: list[dict], persona: Persona, script: dict | None = None) -> dict:
     lay = persona.expertise_level <= 2
     mid = persona.expertise_level <= 3
     elderly = persona.digital_literacy <= 1 or "70" in persona.age_group or "고령" in persona.name
@@ -374,8 +400,20 @@ def _analyze_demo(pages: list[dict], persona: Persona) -> dict:
                                           "숫자만 잔뜩이네."))
         weights = {"critical": 12, "warning": 6, "suggestion": 2}
         penalty += sum(weights[i["severity"]] for i in issues)
+        issues += _demo_script_issues(scripts.page_text(script, page["index"]), persona, lay, mid)
         issues.sort(key=lambda i: SEVERITIES.index(i["severity"]))
         out_pages.append({"page": page["index"], "page_comment": "", "issues": issues[:8]})
+    timing = scripts.timing(script, [p["index"] for p in pages])
+    if timing and timing["over"]:
+        longest = max(timing["per_page"], key=lambda p: p["chars"])
+        page_out = next(p for p in out_pages if p["page"] == longest["page"])
+        page_out["issues"].insert(0, _demo_issue(
+            [], "warning", "논리·구성", "발표 시간이 목표보다 깁니다",
+            f"대본 기준 예상 {timing['est_minutes']}분으로 목표 {timing['target_minutes']}분을 넘습니다. "
+            f"이 페이지가 가장 깁니다(약 {longest['minutes']}분).",
+            "페르소나에게 꼭 필요한 내용만 남기고 배경 설명은 질의응답이나 자료로 돌리세요.",
+            "언제 끝나지…", target="script"))
+        penalty += 6
     score = max(5, 100 - penalty // max(len(pages), 1))
     return {
         "overall": {
@@ -390,7 +428,37 @@ def _analyze_demo(pages: list[dict], persona: Persona) -> dict:
     }
 
 
-def _demo_issue(block_ids, severity, category, title, reason, suggestion, reaction, bbox=None) -> dict:
-    return {"block_ids": block_ids, "bbox": bbox or {"x": 0, "y": 0, "w": 0, "h": 0}, "severity": severity,
+def _demo_script_issues(text: str, persona: Persona, lay: bool, mid: bool) -> list[dict]:
+    """대본(귀로 듣는 말)에 대한 규칙 기반 지적."""
+    if not text:
+        return []
+    out = []
+    long = scripts.long_sentences(text)
+    if long:
+        sample = long[0][:40] + "…"
+        out.append(_demo_issue([], "warning", "가독성", "말로 듣기엔 문장이 너무 깁니다",
+                               f"'{sample}' 처럼 한 문장이 길면 {persona.name}은(는) 듣다가 앞부분을 놓칩니다 "
+                               f"(긴 문장 {len(long)}개).",
+                               "한 문장에 한 가지 내용만 담아 두세 문장으로 끊어 말하세요.",
+                               "그래서 결론이 뭐라고?", target="script"))
+    words = [w for w in JARGON if w.lower() in text.lower()]
+    acronyms = sorted(set(ACRONYM.findall(text)))
+    if mid and len(words) + len(acronyms) >= 2:
+        found = ", ".join((words + acronyms)[:6])
+        out.append(_demo_issue([], "critical" if lay else "warning", "용어", "대본에 귀로 듣기 어려운 용어가 많습니다",
+                               f"'{found}' 같은 말은 화면보다 귀로 들을 때 더 알아듣기 어렵습니다.",
+                               "쉬운 말로 바꿔 말하고, 꼭 써야 하는 용어는 '쉽게 말해 ~입니다'로 풀어 주세요.",
+                               "방금 뭐라고 한 거지?", target="script"))
+    if MISSING.search(text):
+        out.append(_demo_issue([], "warning", "누락정보", "말로도 정보를 미루고 있습니다",
+                               f"'{MISSING.search(text).group(0)}' 라고 말하면 듣는 사람은 지금 무엇을 해야 할지 모릅니다.",
+                               "정해진 것과 언제 알려줄지를 구체적으로 말하세요 (예: '3월 중 문자로 안내합니다').",
+                               "그럼 오늘 왜 들으러 온 거지?", target="script"))
+    return out
+
+
+def _demo_issue(block_ids, severity, category, title, reason, suggestion, reaction, bbox=None, target="slide") -> dict:
+    return {"block_ids": block_ids, "bbox": bbox or {"x": 0, "y": 0, "w": 0, "h": 0}, "target": target,
+            "severity": severity,
             "category": category, "title": title, "reason": reason, "suggestion": suggestion,
             "persona_reaction": reaction}

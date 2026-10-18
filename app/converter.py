@@ -51,6 +51,7 @@ class Page:
     width: int
     height: int
     blocks: list[Block] = field(default_factory=list)
+    notes: str = ""  # PPTX 발표자 노트
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -183,7 +184,30 @@ def convert_office(src: Path, out_dir: Path) -> list[Page]:
         if not pdfs:
             raise ConversionError("LibreOffice가 PDF를 만들지 못했습니다.")
         shutil.copy(pdfs[0], out_dir / "converted.pdf")
-    return convert_pdf(out_dir / "converted.pdf", out_dir)
+    pages = convert_pdf(out_dir / "converted.pdf", out_dir)
+    if src.suffix.lower() == ".pptx":
+        for page, notes in zip(pages, pptx_notes(src)):
+            page.notes = notes
+    return pages
+
+
+def pptx_notes(src: Path) -> list[str]:
+    """PPTX 의 슬라이드별 발표자 노트. 숨긴 슬라이드는 PDF 에도 없으므로 건너뛴다."""
+    try:
+        from pptx import Presentation
+    except ImportError:
+        return []
+    try:
+        prs = Presentation(str(src))
+    except Exception:  # noqa: BLE001 - 노트는 부가 정보라 실패해도 변환은 계속한다
+        return []
+    out = []
+    for slide in prs.slides:
+        if slide._element.get("show") == "0":
+            continue
+        text = slide.notes_slide.notes_text_frame.text.strip() if slide.has_notes_slide else ""
+        out.append(text)
+    return out
 
 
 # ---------------------------------------------------------------- HTML

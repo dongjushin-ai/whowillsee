@@ -77,6 +77,10 @@ def annotated_pdf(meta: dict, doc_path: Path, result: dict) -> bytes:
     c = overall["counts"]
     w.text(f"전달력 점수 {overall['score']} / 100   ·   치명 {c['critical']} · 주의 {c['warning']} · 제안 {c['suggestion']}",
            size=13, color=RED, gap=12)
+    timing = overall.get("timing")
+    if timing:
+        target = f" / 목표 {timing['target_minutes']:g}분" if timing.get("target_minutes") else ""
+        w.text(f"예상 발표 시간 {timing['est_minutes']:g}분{target} (대본 기준)", size=11, gap=10)
     if result.get("context"):
         w.text("자료 사용 상황", size=12, gap=2)
         w.text(result["context"], gap=10)
@@ -100,6 +104,8 @@ def annotated_pdf(meta: dict, doc_path: Path, result: dict) -> bytes:
         page.insert_font(fontname="kr", fontbuffer=_FONT.buffer)
         same_box: dict[tuple, int] = {}
         for issue in rpage["issues"]:
+            if not issue.get("box"):  # 대본 지적은 메모 페이지에만 싣는다
+                continue
             b = issue["box"]
             rect = pymupdf.Rect(b["x"] * pw, b["y"] * ph, (b["x"] + b["w"]) * pw, (b["y"] + b["h"]) * ph)
             color = COLORS[issue["severity"]]
@@ -119,7 +125,8 @@ def annotated_pdf(meta: dict, doc_path: Path, result: dict) -> bytes:
             if rpage.get("page_comment"):
                 w.text(rpage["page_comment"], color=(0.35, 0.35, 0.35), gap=10)
             for issue in rpage["issues"]:
-                w.text(f"#{issue['n']}  [{LABELS[issue['severity']]}·{issue['category']}]  {issue['title']}",
+                where = "[대본] " if issue.get("target") == "script" else ""
+                w.text(f"#{issue['n']}  {where}[{LABELS[issue['severity']]}·{issue['category']}]  {issue['title']}",
                        size=11.5, color=COLORS[issue["severity"]], gap=2)
                 w.text(_memo(issue), indent=10, gap=10)
     return doc.tobytes(garbage=3, deflate=True)

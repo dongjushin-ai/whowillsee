@@ -76,6 +76,7 @@
           <div id="doc-sub" class="muted"></div>
         </div>
         <div class="exports">
+          <button type="button" class="btn" id="script-btn" title="발표하면서 말할 내용을 함께 평가합니다">🎤 발표 대본</button>
           <label class="btn" title="고친 자료를 올리면 이 버전과 비교합니다">⬆ 수정본 올리기
             <input id="version-input" type="file" hidden
                    accept=".pdf,.ppt,.pptx,.odp,.key,.doc,.docx,.odt,.html,.htm,.png,.jpg,.jpeg,.webp,.gif,.bmp">
@@ -155,6 +156,23 @@
     </details>
   </div>
 </div>
+
+<dialog id="script-dialog" class="wide">
+  <form id="script-form" method="dialog">
+    <h2>🎤 발표 대본</h2>
+    <p class="muted">각 페이지를 띄워 놓고 말할 내용을 적으세요. 다시 분석하면 청중이 "귀로 들었을 때" 문제가 되는 부분도 지적하고, 예상 발표 시간을 계산합니다.
+      PPTX의 발표자 노트는 자동으로 채워집니다.</p>
+    <div class="script-top">
+      <label>목표 발표 시간 <input name="target_minutes" type="number" min="0.5" max="600" step="0.5" placeholder="예) 10"> 분</label>
+      <span id="script-estimate" class="muted"></span>
+    </div>
+    <div id="script-pages" class="script-pages"></div>
+    <div class="dialog-actions">
+      <button type="button" class="btn ghost" id="script-cancel">취소</button>
+      <button type="submit" class="btn primary">저장</button>
+    </div>
+  </form>
+</dialog>
 
 <dialog id="audience-dialog">
   <form id="audience-form" method="dialog">
