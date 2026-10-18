@@ -88,6 +88,17 @@ def annotated_pdf(meta: dict, doc_path: Path, result: dict) -> bytes:
         rate = f"말 속도 {delivery['rate']}자/분 · " if delivery.get("rate") else ""
         w.text(f"{rate}말버릇 {delivery['filler_total']}회 · 긴 멈춤 {delivery['long_pauses']}회 (녹음 '{delivery.get('filename', '')}')",
                size=10, color=(0.35, 0.35, 0.35), gap=10)
+    vid = overall.get("video")
+    if vid:
+        from .report_html import video_line
+
+        w.text("발표 모습 (영상)", size=12, gap=2)
+        w.text(video_line(vid) + " (정면 얼굴 검출 기반의 대략적 추정)", size=10, color=(0.35, 0.35, 0.35), gap=4)
+        for f in vid.get("feedback", []):
+            w.text(f"{f['n']}  [{LABELS[f['severity']]}·{f['category']}·{f['at_seconds']:.0f}초]  {f['title']}",
+                   size=11, color=COLORS[f["severity"]], gap=2)
+            w.text(f"왜 문제인가: {f['reason']}\n이렇게 고치세요: {f['suggestion']}", indent=10, gap=6)
+        w.y += 6
     if result.get("context"):
         w.text("자료 사용 상황", size=12, gap=2)
         w.text(result["context"], gap=10)

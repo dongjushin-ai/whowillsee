@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import providers, recording
+from . import providers, recording, video
 from . import script as scripts
 from .personas import Persona
 
@@ -40,6 +40,7 @@ def analyze(doc: dict, doc_path: Path, persona: Persona, context: str = "",
     pages = doc["pages"]
     script = doc.get("script")
     delivery = recording.delivery_summary(doc.get("recording"))
+    vsum = video.summary(doc.get("video"))
     try:
         provider = providers.get_provider()
     except providers.ProviderError as exc:
@@ -47,11 +48,16 @@ def analyze(doc: dict, doc_path: Path, persona: Persona, context: str = "",
     if provider:
         raw = _analyze_with_ai(provider, pages, doc_path, persona, context, progress, script, delivery)
         mode, engine = "ai", provider.engine
+        feedback = _video_review_ai(provider, persona, context, vsum, doc_path) if vsum else []
     else:
         raw, mode, engine = _analyze_demo(pages, persona, script, doc.get("recording")), "demo", None
+        feedback = _video_review_demo(vsum, persona) if vsum else []
         progress(1, 1)
     timing = scripts.timing(script, [p["index"] for p in pages])
-    return finalize(raw, pages, persona, mode, engine, context, timing, delivery)
+    result = finalize(raw, pages, persona, mode, engine, context, timing, delivery)
+    if vsum:
+        result["overall"]["video"] = {**vsum, "feedback": _normalize_feedback(feedback)}
+    return result
 
 
 def finalize(raw: dict, pages: list[dict], persona: Persona, mode: str,
@@ -336,6 +342,117 @@ def _synthesize(client, persona: Persona, context: str, pages: list[dict], overa
         "", "위 부분 결과를 바탕으로 자료 전체에 대한 overall 을 작성하세요.",
     ])}]
     return _call(client, content, OVERALL_SCHEMA, max_tokens=8000)
+
+
+# ====================================================================== 발표 영상
+
+VIDEO_CATEGORIES = ["시선", "표정", "자세", "손동작", "목소리·속도", "화면구성", "복장·배경", "기타"]
+VIDEO_SCHEMA = {
+    "type": "object",
+    "properties": {"items": {"type": "array", "items": {
+        "type": "object",
+        "properties": {
+            "severity": {"type": "string", "enum": SEVERITIES},
+            "category": {"type": "string", "enum": VIDEO_CATEGORIES},
+            "title": {"type": "string"}, "reason": {"type": "string"}, "suggestion": {"type": "string"},
+            "persona_reaction": {"type": "string"}, "at_seconds": {"type": "number"},
+        },
+        "required": ["severity", "category", "title", "reason", "suggestion", "persona_reaction", "at_seconds"],
+        "additionalProperties": False,
+    }}},
+    "required": ["items"],
+    "additionalProperties": False,
+}
+
+
+def _video_metrics_text(v: dict) -> str:
+    away = f", {v['longest_away_at']:.0f}초부터" if v.get("longest_away_at") is not None else ""
+    return "\n".join([
+        f"- 영상 길이 {v['duration_seconds'] / 60:.1f}분",
+        f"- 정면 얼굴이 보인 장면 {v['frontal_ratio'] * 100:.0f}% (카메라·청중을 보는 정도의 대략적 추정)",
+        f"- 얼굴이 화면 안에 있는 장면 {v['visible_ratio'] * 100:.0f}%",
+        f"- 정면을 보지 않은 가장 긴 구간 {v['longest_away_seconds']:.0f}초{away}",
+        f"- 얼굴 크기(화면 높이 대비) {v['face_size'] if v.get('face_size') is not None else '알 수 없음'}",
+        f"- 평균 밝기 {v['brightness']:.2f} (0 어두움 ~ 1 밝음), 좌우 움직임 {v['movement']:.3f}",
+    ])
+
+
+def _video_review_ai(provider, persona: Persona, context: str, v: dict, doc_path: Path) -> list[dict]:
+    content = [{"type": "text", "text": "\n".join([
+        "## 페르소나", persona.to_prompt(),
+        *(["## 자료 사용 상황", context] if context.strip() else []),
+        "## 발표 영상 지표 (자동 측정)", _video_metrics_text(v),
+        "", "아래는 발표 영상의 대표 장면입니다. 이 페르소나가 이 발표를 직접 본다면 발표자의 시선, 표정, 자세, 손동작,"
+            " 화면 구성(조명·거리·배경)에서 무엇이 신경 쓰일지 지적하세요. 잘하는 점은 지적으로 만들지 마세요."
+            " at_seconds 는 그 문제가 잘 보이는 장면의 시간(초)입니다. 최대 6개.",
+    ])}]
+    for k in v.get("keyframes", []):
+        path = doc_path / "video" / k["image"]
+        if path.exists():
+            content.append({"type": "text", "text": f"장면 {k['t']:.0f}초"})
+            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                        "data": base64.standard_b64encode(path.read_bytes()).decode()}})
+    try:
+        return provider.complete_json(SYSTEM_PROMPT, content, VIDEO_SCHEMA, max_tokens=8000).get("items", [])
+    except providers.ProviderError as exc:
+        raise AnalysisError(f"영상 평가 중 오류: {exc}") from exc
+
+
+def _video_review_demo(v: dict, persona: Persona) -> list[dict]:
+    out = []
+
+    def add(severity, category, title, reason, suggestion, reaction, at=0.0):
+        out.append({"severity": severity, "category": category, "title": title, "reason": reason,
+                    "suggestion": suggestion, "persona_reaction": reaction, "at_seconds": at})
+
+    fr = v["frontal_ratio"]
+    if fr < 0.5:
+        add("critical" if fr < 0.3 else "warning", "시선", "청중을 보는 시간이 짧습니다",
+            f"정면 얼굴이 보인 장면이 {fr * 100:.0f}%뿐입니다. 화면이나 원고만 보면 {persona.name}은(는) "
+            "자기에게 말하지 않는다고 느낍니다.",
+            "문장의 끝은 청중(카메라)을 보며 말하세요. 원고는 키워드만 적어 두고 슬쩍 확인하세요.",
+            "나한테 말하는 게 아니네.", v.get("longest_away_at") or 0.0)
+    elif v["longest_away_seconds"] >= 20:
+        add("warning", "시선", "한동안 청중을 보지 않는 구간이 있습니다",
+            f"{v['longest_away_at']:.0f}초부터 약 {v['longest_away_seconds']:.0f}초 동안 정면을 보지 않았습니다.",
+            "슬라이드를 설명할 때도 한 문장마다 청중을 한 번씩 보세요.", "어디 보고 얘기하는 거지?",
+            v.get("longest_away_at") or 0.0)
+    if v["visible_ratio"] < 0.7:
+        add("warning", "화면구성", "화면 밖으로 자주 벗어납니다",
+            f"얼굴이 화면 안에 있는 장면이 {v['visible_ratio'] * 100:.0f}%입니다.",
+            "카메라를 조금 뒤로 빼거나, 움직이는 범위를 정해 두세요.", "어, 어디 갔지?", v.get("first_away_at") or 0.0)
+    if v.get("face_size") is not None and v["face_size"] < 0.08:
+        add("suggestion", "화면구성", "발표자가 너무 작게 보입니다",
+            "얼굴이 화면 높이의 8%도 안 돼 표정이 전달되지 않습니다.",
+            "카메라를 가까이 두거나 확대해 상반신이 보이게 찍으세요.", "표정이 하나도 안 보여.")
+    if v["brightness"] < 0.3:
+        add("warning", "화면구성", "조명이 어둡습니다",
+            f"평균 밝기가 {v['brightness']:.2f}로 어두워 표정이 잘 보이지 않습니다.",
+            "얼굴 앞쪽(창문이나 조명 쪽)을 향해 서세요. 뒤에서 빛이 오면 얼굴이 어두워집니다.", "얼굴이 어둡네.")
+    if v["movement"] > 0.15:
+        add("suggestion", "자세", "좌우로 많이 움직입니다",
+            "발표 중 좌우 위치 변화가 커서 산만해 보일 수 있습니다.",
+            "중요한 말을 할 때는 멈춰 서서 말하고, 이동은 페이지를 넘길 때만 하세요.", "왔다 갔다 하니까 정신없어.")
+    return out
+
+
+def _normalize_feedback(items: list[dict]) -> list[dict]:
+    out = []
+    order = {s: i for i, s in enumerate(SEVERITIES)}
+    for item in items:
+        severity = item.get("severity") if item.get("severity") in SEVERITIES else "warning"
+        try:
+            at = max(0.0, float(item.get("at_seconds") or 0))
+        except (TypeError, ValueError):
+            at = 0.0
+        out.append({"severity": severity, "category": item.get("category") or "기타",
+                    "title": (item.get("title") or "").strip(), "reason": (item.get("reason") or "").strip(),
+                    "suggestion": (item.get("suggestion") or "").strip(),
+                    "persona_reaction": (item.get("persona_reaction") or "").strip(), "at_seconds": round(at, 1)})
+    out.sort(key=lambda i: (order[i["severity"]], i["at_seconds"]))
+    for n, item in enumerate(out, 1):
+        item["n"] = f"V{n}"
+    return out
 
 
 # ====================================================================== 데모 모드

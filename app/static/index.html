@@ -87,6 +87,9 @@
           <label class="btn" title="리허설 녹음을 받아써서 실제 대본·발표 시간·말버릇을 잽니다">🎙 녹음 올리기
             <input id="recording-input" type="file" hidden accept=".mp3,.m4a,.wav,.webm,.ogg,.mp4,.mpeg,.mpga,.flac,.aac,audio/*">
           </label>
+          <label class="btn" title="리허설 영상을 올리면 시선·자세·화면 구성과 말하기를 함께 봅니다">🎥 영상 올리기
+            <input id="video-input" type="file" hidden accept=".mp4,.mov,.webm,.mkv,.m4v,.avi,video/*">
+          </label>
           <label class="btn" title="고친 자료를 올리면 이 버전과 비교합니다">⬆ 수정본 올리기
             <input id="version-input" type="file" hidden
                    accept=".pdf,.ppt,.pptx,.odp,.key,.doc,.docx,.odt,.html,.htm,.png,.jpg,.jpeg,.webp,.gif,.bmp">
@@ -97,6 +100,7 @@
       <nav id="tabs" class="tabs"></nav>
       <div id="overall" class="overall"></div>
       <div id="compare" class="compare" hidden></div>
+      <div id="video-panel" class="video-panel" hidden></div>
       <div class="filters" id="filters"></div>
       <div class="split">
         <div id="pages" class="pages"></div>

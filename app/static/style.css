@@ -409,3 +409,21 @@ dialog.wide { width: min(900px, 96vw); }
 .delivery { font-size: 13px; margin: -4px 0 10px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .delivery b { font-variant-numeric: tabular-nums; }
 #script-source { margin: 0 0 12px; display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+
+/* ---------- 발표 영상 ---------- */
+.video-panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 18px; margin-bottom: 12px; }
+.video-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.video-head h3 { margin: 0; font-size: 14px; }
+.video-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; margin: 6px 0 10px; }
+.video-stats b { font-variant-numeric: tabular-nums; }
+.timeline { display: flex; gap: 2px; height: 16px; margin: 4px 0 4px; }
+.timeline i { flex: 1; border-radius: 2px; min-width: 2px; }
+.timeline i.frontal { background: var(--series-1); }
+.timeline i.side { background: var(--seq-1); }
+.timeline i.away { background: var(--line); }
+.timeline-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; margin-bottom: 4px; }
+.legend i.frontal { background: var(--series-1); } .legend i.side { background: var(--seq-1); } .legend i.away { background: var(--line); }
+.vfeed { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.vfeed .memo { display: grid; grid-template-columns: 120px 1fr; gap: 10px; cursor: default; }
+.vfeed img { width: 120px; border-radius: 6px; border: 1px solid var(--line); }
+@media (max-width: 900px) { .vfeed { grid-template-columns: 1fr; } }

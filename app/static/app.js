@@ -605,9 +605,11 @@ function pollJob(jobId, docId, audienceId = null) {
       await loadDocs();
       if (job.status === "done") {
         setProgress([]);
-        toast(job.kind === "recording"
-          ? "받아쓰기가 끝났습니다. '🎤 발표 대본'에서 확인하고, '분석 시작'을 누르면 실제 발표 기준으로 평가합니다."
-          : "분석이 끝났습니다.", job.kind === "recording" ? 7000 : 3500);
+        const doneMsg = {
+          recording: "받아쓰기가 끝났습니다. '🎤 발표 대본'에서 확인하고, '분석 시작'을 누르면 실제 발표 기준으로 평가합니다.",
+          video: "영상 분석이 끝났습니다. '분석 시작'을 누르면 청중 관점의 발표 모습 평가가 함께 나옵니다.",
+        }[job.kind];
+        toast(doneMsg || "분석이 끝났습니다.", doneMsg ? 7000 : 3500);
       }
     }
   };
@@ -727,6 +729,77 @@ function deliveryLine(d) {
     d.timed ? null : el("span", { class: "muted" }, "· 이 음성 인식 서버는 구간 시간을 주지 않아 페이지별 시간은 추정치입니다"));
 }
 
+// ------------------------------------------------------------------ 발표 영상
+
+async function uploadVideo(file) {
+  if (!state.doc) return;
+  const fd = new FormData();
+  fd.append("file", file);
+  try {
+    const job = await api(`/api/documents/${state.doc.id}/video`, { method: "POST", body: fd });
+    pollJob(job.id, state.doc.id);
+  } catch (err) {
+    toast(`영상 올리기 실패: ${err.message}`, 6000);
+  }
+}
+
+const VIDEO_AUDIO_NOTE = {
+  transcribed: "영상 속 음성도 받아써서 발표 대본과 실제 시간을 채웠습니다.",
+  no_speech_setup: "음성은 분석하지 않았습니다. 'AI 연결 > 음성 인식'을 켜면 영상 속 말도 함께 봅니다.",
+  no_audio: "영상에 음성이 없습니다.",
+  no_ffmpeg: "서버에 ffmpeg 가 없어 음성을 뽑지 못했습니다.",
+};
+const VSTATE = { frontal: "정면", side: "옆·아래", away: "화면 밖" };
+
+function renderVideo() {
+  const box = $("#video-panel");
+  const v = state.doc?.video;
+  box.hidden = !v;
+  if (!v) return fill(box);
+  const m = v.metrics;
+  const fb = state.result?.overall?.video?.feedback;
+  const frameUrl = (k) => `/api/documents/${state.doc.id}/video/${k.image}`;
+  const nearest = (t) => v.keyframes.reduce((a, k) => (Math.abs(k.t - t) < Math.abs(a.t - t) ? k : a), v.keyframes[0]);
+  const audio = v.audio?.startsWith("error") ? `음성 받아쓰기 실패: ${v.audio.slice(7)}` : VIDEO_AUDIO_NOTE[v.audio] || "";
+  fill(box,
+    el("div", { class: "video-head" },
+      el("h3", {}, `🎥 발표 모습 · ${v.filename}`),
+      el("button", { class: "btn small", onclick: deleteVideo }, "영상 분석 지우기")),
+    el("div", { class: "video-stats" },
+      el("span", {}, "정면을 본 장면 ", el("b", {}, `${Math.round(m.frontal_ratio * 100)}%`)),
+      el("span", {}, "화면 안 ", el("b", {}, `${Math.round(m.visible_ratio * 100)}%`)),
+      el("span", {}, "정면을 안 본 가장 긴 구간 ", el("b", {}, `${Math.round(m.longest_away_seconds)}초`)),
+      el("span", {}, "밝기 ", el("b", {}, m.brightness.toFixed(2))),
+      el("span", { class: "muted" }, "(정면 얼굴 검출로 잰 대략적 추정)")),
+    el("div", { class: "legend" }, ...Object.entries(VSTATE).map(([k, label]) => el("span", {}, el("i", { class: k }), label))),
+    el("div", { class: "timeline" }, ...m.timeline.map((x) =>
+      bindTip(el("i", { class: x.state }), () => [`${Math.floor(x.t / 60)}:${String(Math.round(x.t % 60)).padStart(2, "0")} · ${VSTATE[x.state]}`]))),
+    el("div", { class: "timeline-axis" }, el("span", {}, "0:00"),
+      el("span", {}, `${Math.floor(m.duration_seconds / 60)}:${String(Math.round(m.duration_seconds % 60)).padStart(2, "0")}`)),
+    audio ? el("div", { class: "muted" }, audio) : null,
+    !state.result ? null
+      : !fb ? el("div", { class: "note" }, "영상을 올리기 전에 분석한 결과입니다. '분석 시작'을 다시 누르면 이 청중 관점의 발표 모습 평가가 나옵니다.")
+        : !fb.length ? el("div", { class: "note ok" }, "발표 모습에서 눈에 띄는 문제가 없습니다.")
+          : el("div", { class: "vfeed" }, ...fb.map((f) => {
+            const k = nearest(f.at_seconds);
+            return el("div", { class: `memo ${f.severity}` },
+              k ? el("img", { src: frameUrl(k), alt: `${Math.round(k.t)}초 장면`, loading: "lazy" }) : el("span"),
+              el("div", {},
+                el("div", { class: "memo-head" }, el("span", { class: "n" }, f.n), el("span", { class: "title" }, f.title)),
+                el("div", { class: "memo-meta" }, `${SEV[f.severity]} · ${f.category} · ${Math.round(f.at_seconds)}초`),
+                el("dl", {}, el("dt", {}, "왜 문제인가"), el("dd", {}, f.reason), el("dt", {}, "이렇게 고치세요"), el("dd", {}, f.suggestion)),
+                f.persona_reaction ? el("div", { class: "reaction" }, `💭 “${f.persona_reaction}”`) : null));
+          })),
+  );
+}
+
+async function deleteVideo() {
+  if (!confirm("영상 분석 결과(장면·지표)를 지울까요?")) return;
+  await api(`/api/documents/${state.doc.id}/video`, { method: "DELETE" });
+  state.doc = await api(`/api/documents/${state.doc.id}`);
+  renderVideo();
+}
+
 async function resumeJob() {
   // 새로고침 전에 진행 중이던 분석이 있으면 이어서 진행 상황을 보여준다
   let saved = null;
@@ -843,6 +916,7 @@ function render() {
   renderTabs();
   renderOverall();
   renderCompare();
+  renderVideo();
   renderFilters();
   renderPages();
   renderMemos();
@@ -1050,6 +1124,10 @@ function bind() {
   $("#autofill-btn").addEventListener("click", autofillPersona);
   $("#audience-form").addEventListener("submit", saveAudience);
   $("#script-btn").addEventListener("click", openScriptDialog);
+  $("#video-input").addEventListener("change", (e) => {
+    if (e.target.files[0]) uploadVideo(e.target.files[0]);
+    e.target.value = "";
+  });
   $("#recording-input").addEventListener("change", (e) => {
     if (e.target.files[0]) uploadRecording(e.target.files[0]);
     e.target.value = "";

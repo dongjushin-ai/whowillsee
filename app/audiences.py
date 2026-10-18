@@ -201,6 +201,9 @@ def aggregate(audience: Audience, results: dict[str, dict]) -> dict:
             "top_fixes": [f"{c['rep']['title']} (청중 {c['share']}%)" for c in clusters[:5]],
             "counts": counts,
             "timing": next((r["overall"].get("timing") for r in results.values() if r["overall"].get("timing")), None),
+            # 영상 피드백은 페르소나별이라 비중이 가장 큰 구성원의 것을 보여준다
+            "video": next((results[m.persona_id]["overall"].get("video") for m in sorted(present, key=lambda m: -m.weight)
+                           if results[m.persona_id]["overall"].get("video")), None),
         },
         "pages": out_pages,
         "weights": weights,

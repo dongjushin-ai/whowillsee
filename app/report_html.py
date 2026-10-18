@@ -99,6 +99,7 @@ def render(meta: dict, doc_path: Path, result: dict) -> str:
         if items:
             parts.append(f"<h3>{title}</h3><ol>{''.join(f'<li>{_e(i)}</li>' for i in items)}</ol>")
     parts.append("</div></section>")
+    parts.append(_video_section(o.get("video"), doc_path))
 
     for rp in result["pages"]:
         pm = pages_meta.get(rp["page"])
@@ -140,3 +141,34 @@ def _memo(i: dict) -> str:
     return (f"<div class='memo {i['severity']}' id='m{i['n']}'>{tag}<b>#{i['n']} {_e(i['title'])}</b>"
             f"<div class='muted'>{SEV[i['severity']]} · {_e(i['category'])}</div>{who}"
             f"<p><span class='k'>왜 문제인가</span><br>{_e(i['reason'])}</p>{suggestion}{reaction}</div>")
+
+
+def video_line(v: dict) -> str:
+    return (f"정면을 본 장면 {v['frontal_ratio'] * 100:.0f}% · 화면 안 {v['visible_ratio'] * 100:.0f}% · "
+            f"정면을 안 본 가장 긴 구간 {v['longest_away_seconds']:.0f}초 · 밝기 {v['brightness']:.2f}")
+
+
+def nearest_frame(v: dict, at: float) -> dict | None:
+    frames = v.get("keyframes") or []
+    return min(frames, key=lambda k: abs(k["t"] - at)) if frames else None
+
+
+def _video_section(v: dict | None, doc_path: Path) -> str:
+    if not v:
+        return ""
+    items = []
+    for f in v.get("feedback", []):
+        frame = nearest_frame(v, f["at_seconds"])
+        img = ""
+        if frame and (doc_path / "video" / frame["image"]).exists():
+            data = base64.standard_b64encode((doc_path / "video" / frame["image"]).read_bytes()).decode()
+            img = f"<img alt='{frame['t']:.0f}초 장면' style='width:160px;border-radius:6px;float:right;margin-left:10px' src='data:image/jpeg;base64,{data}'>"
+        items.append(f"<div class='memo {f['severity']}'>{img}<b>{_e(f['n'])} {_e(f['title'])}</b>"
+                     f"<div class='muted'>{SEV[f['severity']]} · {_e(f['category'])} · {f['at_seconds']:.0f}초</div>"
+                     f"<p><span class='k'>왜 문제인가</span><br>{_e(f['reason'])}</p>"
+                     f"<p><span class='k'>이렇게 고치세요</span><br>{_e(f['suggestion'])}</p>"
+                     + (f"<p class='reaction'>💭 “{_e(f['persona_reaction'])}”</p>" if f.get("persona_reaction") else "")
+                     + "<div style='clear:both'></div></div>")
+    body = "".join(items) or "<div class='muted'>눈에 띄는 문제가 없습니다.</div>"
+    return (f"<section class='card'><h2>🎥 발표 모습</h2><div class='muted'>영상 '{_e(v.get('filename'))}' · "
+            f"{_e(video_line(v))} (정면 얼굴 검출 기반의 대략적 추정)</div><div style='margin-top:10px'>{body}</div></section>")

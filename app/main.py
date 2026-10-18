@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import shutil
+import tempfile
 import threading
 import time
 import traceback
@@ -18,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import (analyzer, audiences, compare, converter, exporter, persona_gen, personas, providers, recording,
-               report_html, script, speech, stats, storage)
+               report_html, script, speech, stats, storage, video)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -373,21 +374,26 @@ def upload_recording(doc_id: str, file: UploadFile = File(...)):
     return _job_view(job)
 
 
+def _apply_transcript(doc_id: str, filename: str, transcript: dict) -> None:
+    """받아쓰기 결과를 문서에 반영한다: 녹음 지표 + 페이지별 대본 + 실제 시간."""
+    meta = storage.read_json(storage.doc_dir(doc_id) / "meta.json")  # 그사이 바뀐 내용 반영
+    metrics = recording.analyze(meta, transcript)
+    meta["recording"] = {"filename": filename, "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                         "transcript": transcript, "metrics": metrics}
+    previous = meta.get("script") or {}
+    meta["script"] = {"target_minutes": previous.get("target_minutes"), "pages": metrics["page_texts"],
+                      "source": "recording",
+                      "actual_seconds": {str(p["page"]): p["seconds"] for p in metrics["per_page"]}
+                      if metrics["timed"] else {}}
+    storage.write_json(storage.doc_dir(doc_id) / "meta.json", meta)
+
+
 def _run_recording(job: dict, meta: dict, settings, filename: str, data: bytes) -> None:
     item = job["items"]["recording"]
     try:
         transcript = speech.transcribe(settings, filename, data)
         item["done"] = 1
-        metrics = recording.analyze(meta, transcript)
-        meta = storage.read_json(storage.doc_dir(meta["id"]) / "meta.json")  # 그사이 바뀐 내용 반영
-        meta["recording"] = {"filename": filename, "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                             "transcript": transcript, "metrics": metrics}
-        previous = meta.get("script") or {}
-        meta["script"] = {"target_minutes": previous.get("target_minutes"), "pages": metrics["page_texts"],
-                          "source": "recording",
-                          "actual_seconds": {str(p["page"]): p["seconds"] for p in metrics["per_page"]}
-                          if metrics["timed"] else {}}
-        storage.write_json(storage.doc_dir(meta["id"]) / "meta.json", meta)
+        _apply_transcript(meta["id"], filename, transcript)
         item["done"], item["status"] = 2, "done"
     except speech.SpeechError as exc:
         item["status"], item["error"] = "error", str(exc)
@@ -397,6 +403,92 @@ def _run_recording(job: dict, meta: dict, settings, filename: str, data: bytes) 
     with _jobs_lock:
         job["status"] = "done" if item["status"] == "done" else "error"
         _save_job(job)
+
+
+# ------------------------------------------------------------------ 발표 영상
+
+@app.post("/api/documents/{doc_id}/video", status_code=202)
+def upload_video(doc_id: str, file: UploadFile = File(...)):
+    _doc_meta(doc_id)
+    if not video.available():
+        raise HTTPException(501, "영상 분석에는 opencv-python-headless 패키지가 필요합니다.")
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in video.VIDEO_EXTS:
+        raise HTTPException(400, f"지원하지 않는 영상 형식입니다: {ext or '(확장자 없음)'}")
+    tmp_dir = Path(tempfile.mkdtemp(prefix="wws-video-"))
+    src = tmp_dir / ("source" + ext)
+    size = 0
+    with src.open("wb") as f:
+        while chunk := file.file.read(1024 * 1024):
+            size += len(chunk)
+            if size > video.MAX_VIDEO_BYTES:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                raise HTTPException(413, "영상이 너무 큽니다 (최대 300MB). 해상도를 낮춰 저장해 주세요.")
+            f.write(chunk)
+    job_id = storage.new_id()
+    job = {"id": job_id, "doc_id": doc_id, "kind": "video", "status": "running", "created_at": time.time(),
+           "items": {"video": {"persona_id": "video", "name": "🎥 영상 분석", "status": "running",
+                               "done": 0, "total": 2, "error": None}}}
+    with _jobs_lock:
+        _jobs[job_id] = job
+        _save_job(job)
+    _executor.submit(_run_video, job, doc_id, Path(file.filename).name, src)
+    return _job_view(job)
+
+
+def _run_video(job: dict, doc_id: str, filename: str, src: Path) -> None:
+    item = job["items"]["video"]
+    try:
+        out_dir = storage.doc_dir(doc_id) / "video"
+        shutil.rmtree(out_dir, ignore_errors=True)
+        result = video.analyze_file(src, out_dir)
+        item["done"] = 1
+        # 영상 속 음성: 음성 인식이 연결되어 있으면 녹음 분석으로 넘긴다
+        settings = speech.load()
+        audio_note = "no_speech_setup"
+        if not speech.problems(settings):
+            audio = video.extract_audio(src)
+            if audio is None:
+                audio_note = "no_audio" if video.ffmpeg_path() else "no_ffmpeg"
+            else:
+                try:
+                    _apply_transcript(doc_id, filename, speech.transcribe(settings, "audio.mp3", audio))
+                    audio_note = "transcribed"
+                except speech.SpeechError as exc:
+                    audio_note = f"error: {exc}"
+        meta = storage.read_json(storage.doc_dir(doc_id) / "meta.json")
+        meta["video"] = {"filename": filename, "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                         "audio": audio_note, **result}
+        storage.write_json(storage.doc_dir(doc_id) / "meta.json", meta)
+        item["done"], item["status"] = 2, "done"
+    except video.VideoError as exc:
+        item["status"], item["error"] = "error", str(exc)
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        item["status"], item["error"] = "error", f"예상치 못한 오류: {exc}"
+    finally:
+        shutil.rmtree(src.parent, ignore_errors=True)  # 원본 영상은 남기지 않는다
+    with _jobs_lock:
+        job["status"] = "done" if item["status"] == "done" else "error"
+        _save_job(job)
+
+
+@app.get("/api/documents/{doc_id}/video/{name}")
+def video_frame(doc_id: str, name: str):
+    meta = _doc_meta(doc_id)
+    frames = {k["image"] for k in (meta.get("video") or {}).get("keyframes", [])}
+    if name not in frames:
+        raise HTTPException(404, "장면을 찾을 수 없습니다.")
+    return FileResponse(storage.doc_dir(doc_id) / "video" / name, media_type="image/jpeg")
+
+
+@app.delete("/api/documents/{doc_id}/video", status_code=204)
+def delete_video(doc_id: str):
+    meta = _doc_meta(doc_id)
+    meta.pop("video", None)
+    shutil.rmtree(storage.doc_dir(doc_id) / "video", ignore_errors=True)
+    storage.write_json(storage.doc_dir(doc_id) / "meta.json", meta)
+    return Response(status_code=204)
 
 
 @app.delete("/api/documents/{doc_id}/recording", status_code=204)

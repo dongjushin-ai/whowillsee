@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     WHOWILLSEE_DATA=/data
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libreoffice-impress libreoffice-writer fonts-noto-cjk \
+    && apt-get install -y --no-install-recommends libreoffice-impress libreoffice-writer fonts-noto-cjk ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
