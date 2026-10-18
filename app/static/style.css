@@ -305,3 +305,24 @@ dialog h2 { margin-top: 0; }
 .autofill-row { display: flex; gap: 6px; }
 .autofill-row input { flex: 1; min-width: 0; }
 .autofill small { display: block; margin-top: 6px; }
+
+/* ---------- 청중 그룹 ---------- */
+.sub-h { font-size: 12px; font-weight: 700; color: var(--muted); margin: 10px 0 6px; }
+.audience-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--line); background: var(--panel); border-radius: 99px; padding: 5px 10px; cursor: pointer; font-size: 13px; display: inline-flex; align-items: center; gap: 4px; }
+.chip.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+.chip .edit { border: 0; background: none; padding: 0 0 0 2px; cursor: pointer; color: var(--muted); font-size: 12px; }
+.chip.add { border-style: dashed; color: var(--muted); }
+.persona .weight { font-size: 12px; font-weight: 700; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 0 5px; margin-left: 4px; }
+.audience-members { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto; }
+.member-row { display: grid; grid-template-columns: auto 1fr 140px 44px; gap: 8px; align-items: center; font-size: 13px; }
+.member-row input[type=range]:disabled { opacity: .35; }
+.member-row output { text-align: right; font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 700; }
+.btn.danger { color: var(--critical); }
+.tab.aud { border-color: var(--accent); }
+.members { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 10px; }
+.member { display: grid; grid-template-columns: minmax(0, 1fr) 70px 46px; gap: 8px; font-size: 13px; align-items: center; }
+.member .share { height: 6px; background: var(--seq-1); border-radius: 3px; overflow: hidden; }
+.member .share i { display: block; height: 100%; background: var(--series-1); }
+.member b { text-align: right; font-variant-numeric: tabular-nums; }
+.voices { font-size: 12px; margin-bottom: 6px; color: var(--text); background: var(--accent-soft); border-radius: 6px; padding: 4px 8px; }

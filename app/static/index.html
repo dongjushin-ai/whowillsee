@@ -27,6 +27,9 @@
   <aside class="sidebar">
     <section>
       <h2><span class="step">1</span> 누가 보나요? <small>(여러 명 선택 가능)</small></h2>
+      <div class="sub-h">청중 그룹 <small class="muted">· 실제 청중 구성 비율대로</small></div>
+      <div id="audience-list" class="audience-list"></div>
+      <div class="sub-h">개별 페르소나</div>
       <div id="persona-list" class="persona-list"></div>
       <button id="new-persona" class="btn ghost full">+ 새 페르소나 만들기</button>
     </section>
@@ -152,6 +155,27 @@
     </details>
   </div>
 </div>
+
+<dialog id="audience-dialog">
+  <form id="audience-form" method="dialog">
+    <h2 id="audience-dialog-title">새 청중 그룹</h2>
+    <p class="muted">실제 발표장에 어떤 사람들이 어떤 비율로 있는지 정하세요. 비율대로 종합 점수를 내고, 여러 청중이 함께 걸려 넘어지는 문제부터 보여줍니다.</p>
+    <div class="grid">
+      <label class="span2">이름 *<input name="name" required maxlength="60" placeholder="예) 학부모 설명회"></label>
+      <label>아이콘<input name="icon" maxlength="8" placeholder="👥"></label>
+      <label class="span2">기본 발표 상황<textarea name="context" rows="2" placeholder="예) 학교 강당, 30분 설명 후 질의응답"></textarea></label>
+    </div>
+    <div class="sub-h" style="margin-top:14px">구성원과 비중</div>
+    <div id="audience-members" class="audience-members"></div>
+    <small id="audience-sum" class="muted"></small>
+    <div class="dialog-actions">
+      <button type="button" class="btn ghost danger" id="audience-delete" hidden>삭제</button>
+      <span style="flex:1"></span>
+      <button type="button" class="btn ghost" id="audience-cancel">취소</button>
+      <button type="submit" class="btn primary">저장</button>
+    </div>
+  </form>
+</dialog>
 
 <dialog id="persona-dialog">
   <form id="persona-form" method="dialog">

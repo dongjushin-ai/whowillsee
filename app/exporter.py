@@ -126,7 +126,11 @@ def annotated_pdf(meta: dict, doc_path: Path, result: dict) -> bytes:
 
 
 def _memo(issue: dict) -> str:
-    parts = [f"왜 문제인가: {issue['reason']}"]
+    parts = []
+    if issue.get("voices"):
+        who = ", ".join(f"{v['name']}({v['weight']})" for v in issue["voices"])
+        parts.append(f"지적한 청중 (비중 {issue['share']}%): {who}")
+    parts.append(f"왜 문제인가: {issue['reason']}")
     if issue.get("suggestion"):
         parts.append(f"이렇게 고치세요: {issue['suggestion']}")
     if issue.get("persona_reaction"):

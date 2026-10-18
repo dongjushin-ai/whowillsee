@@ -16,7 +16,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import analyzer, compare, converter, exporter, persona_gen, personas, providers, stats, storage
+from . import (analyzer, audiences, compare, converter, exporter, persona_gen, personas, providers, stats,
+               storage)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -124,12 +125,53 @@ def update_persona(persona_id: str, data: personas.PersonaIn):
 
 @app.delete("/api/personas/{persona_id}", status_code=204)
 def delete_persona(persona_id: str):
+    used = [a.name for a in audiences.list_audiences() if any(m.persona_id == persona_id for m in a.members)]
+    if used:
+        raise HTTPException(409, f"청중 그룹에서 쓰고 있는 페르소나입니다: {', '.join(used)}. 그룹에서 먼저 빼주세요.")
     try:
         personas.delete_persona(persona_id)
     except PermissionError as exc:
         raise HTTPException(403, str(exc)) from None
     except KeyError:
         raise HTTPException(404, "페르소나를 찾을 수 없습니다.") from None
+    return Response(status_code=204)
+
+
+# ------------------------------------------------------------------ 청중 그룹
+
+@app.get("/api/audiences")
+def list_audiences():
+    return [a.model_dump() for a in audiences.list_audiences()]
+
+
+@app.post("/api/audiences", status_code=201)
+def create_audience(data: audiences.AudienceIn):
+    try:
+        return audiences.create_audience(data).model_dump()
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@app.put("/api/audiences/{audience_id}")
+def update_audience(audience_id: str, data: audiences.AudienceIn):
+    try:
+        return audiences.update_audience(audience_id, data).model_dump()
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except KeyError:
+        raise HTTPException(404, "청중 그룹을 찾을 수 없습니다.") from None
+
+
+@app.delete("/api/audiences/{audience_id}", status_code=204)
+def delete_audience(audience_id: str):
+    try:
+        audiences.delete_audience(audience_id)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from None
+    except KeyError:
+        raise HTTPException(404, "청중 그룹을 찾을 수 없습니다.") from None
     return Response(status_code=204)
 
 
@@ -222,15 +264,27 @@ def page_image(doc_id: str, index: int):
 # ------------------------------------------------------------------ 분석
 
 class AnalyzeRequest(BaseModel):
-    persona_ids: list[str] = Field(default_factory=lambda: [personas.DEFAULT_PERSONA_ID], min_length=1, max_length=8)
+    persona_ids: list[str] = Field(default_factory=lambda: [personas.DEFAULT_PERSONA_ID], max_length=8)
+    audience_id: str = ""  # 지정하면 그룹 구성원을 함께 분석한다
     context: str = Field(default="", max_length=2000)
 
 
 @app.post("/api/documents/{doc_id}/analyze", status_code=202)
 def start_analysis(doc_id: str, req: AnalyzeRequest):
     meta = _doc_meta(doc_id)
+    persona_ids, context = list(req.persona_ids), req.context
+    if req.audience_id:
+        audience = audiences.get_audience(req.audience_id)
+        if not audience:
+            raise HTTPException(404, "청중 그룹을 찾을 수 없습니다.")
+        persona_ids = [m.persona_id for m in audience.members] + persona_ids
+        context = context or audience.context
+    if not persona_ids:
+        raise HTTPException(400, "분석할 페르소나를 하나 이상 고르세요.")
+    if len(set(persona_ids)) > 12:
+        raise HTTPException(400, "한 번에 분석할 수 있는 페르소나는 12명까지입니다.")
     selected = []
-    for pid in dict.fromkeys(req.persona_ids):
+    for pid in dict.fromkeys(persona_ids):
         persona = personas.get_persona(pid)
         if not persona:
             raise HTTPException(404, f"페르소나를 찾을 수 없습니다: {pid}")
@@ -242,7 +296,7 @@ def start_analysis(doc_id: str, req: AnalyzeRequest):
     with _jobs_lock:
         _jobs[job_id] = job
     for persona in selected:
-        _executor.submit(_run_analysis, job, meta, persona, req.context)
+        _executor.submit(_run_analysis, job, meta, persona, context)
     return _job_view(job)
 
 
@@ -320,15 +374,62 @@ def compare_with_previous(doc_id: str, persona_id: str):
     return compare.compare(prev_meta, prev_result, meta, _result(doc_id, persona_id))
 
 
+def _audience_result(doc_id: str, audience_id: str) -> dict:
+    _doc_meta(doc_id)
+    audience = audiences.get_audience(audience_id)
+    if not audience:
+        raise HTTPException(404, "청중 그룹을 찾을 수 없습니다.")
+    results = {m.persona_id: r for m in audience.members
+               if (r := storage.read_json(storage.results_dir(doc_id) / f"{m.persona_id}.json"))}
+    if not results:
+        raise HTTPException(404, "이 그룹의 구성원 분석 결과가 없습니다.")
+    return audiences.aggregate(audience, results)
+
+
+@app.get("/api/documents/{doc_id}/audiences")
+def list_document_audiences(doc_id: str):
+    """이 문서에서 구성원이 모두 분석된 청중 그룹."""
+    _doc_meta(doc_id)
+    analyzed = {p.stem for p in storage.results_dir(doc_id).glob("*.json")}
+    out = []
+    for a in audiences.list_audiences():
+        if {m.persona_id for m in a.members} <= analyzed:
+            agg = _audience_result(doc_id, a.id)
+            out.append({"audience_id": a.id, "name": a.name, "icon": a.icon, "score": agg["overall"]["score"],
+                        "counts": agg["overall"]["counts"]})
+    return out
+
+
+@app.get("/api/documents/{doc_id}/audiences/{audience_id}")
+def get_audience_result(doc_id: str, audience_id: str):
+    return _audience_result(doc_id, audience_id)
+
+
 # ------------------------------------------------------------------ 내보내기
+
+@app.get("/api/documents/{doc_id}/audiences/{audience_id}/export.pdf")
+def export_audience_pdf(doc_id: str, audience_id: str):
+    meta, result = _doc_meta(doc_id), _audience_result(doc_id, audience_id)
+    return _pdf_response(meta, doc_id, result, f"whowillsee_{doc_id}_{audience_id}.pdf")
+
+
+@app.get("/api/documents/{doc_id}/audiences/{audience_id}/export.json")
+def export_audience_json(doc_id: str, audience_id: str):
+    result = _audience_result(doc_id, audience_id)
+    return JSONResponse(result, headers={"Content-Disposition":
+                                         f'attachment; filename="whowillsee_{doc_id}_{audience_id}.json"'})
+
+
+def _pdf_response(meta: dict, doc_id: str, result: dict, name: str) -> Response:
+    data = exporter.annotated_pdf(meta, storage.doc_dir(doc_id), result)
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
 
 @app.get("/api/documents/{doc_id}/results/{persona_id}/export.pdf")
 def export_pdf(doc_id: str, persona_id: str):
     meta, result = _doc_meta(doc_id), _result(doc_id, persona_id)
-    data = exporter.annotated_pdf(meta, storage.doc_dir(doc_id), result)
-    name = f"whowillsee_{doc_id}_{persona_id}.pdf"
-    return Response(data, media_type="application/pdf",
-                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+    return _pdf_response(meta, doc_id, result, f"whowillsee_{doc_id}_{persona_id}.pdf")
 
 
 @app.get("/api/documents/{doc_id}/results/{persona_id}/export.json")

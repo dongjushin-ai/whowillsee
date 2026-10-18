@@ -16,6 +16,10 @@ const state = {
   polling: null,
   status: null,
   settings: null,
+  audiences: [],
+  audience: null,        // 분석에 쓸 청중 그룹 id
+  docAudiences: [],      // 현재 문서에서 결과가 있는 청중 그룹
+  activeAudience: null,  // 결과 화면에서 보고 있는 청중 그룹
   clearKey: false,
 };
 
@@ -33,6 +37,11 @@ function el(tag, attrs = {}, ...children) {
     node.append(c instanceof Node ? c : document.createTextNode(String(c)));
   }
   return node;
+}
+
+// replaceChildren 은 null 을 "null" 글자로 바꿔 넣으므로, 빈 값은 걸러서 채운다
+function fill(node, ...children) {
+  node.replaceChildren(...children.flat().filter((c) => c !== null && c !== undefined && c !== false));
 }
 
 async function api(path, opts = {}) {
@@ -92,10 +101,10 @@ async function loadSettings() {
     openai_compatible: "OpenAI, Gemini, OpenRouter, Ollama·LM Studio(내 컴퓨터) 등 OpenAI 형식 API.",
     demo: "AI 없이 규칙(전문용어·글자 크기·누락 정보)만으로 점검합니다.",
   };
-  cards.replaceChildren(...s.providers.map((p) => el("label", { class: "provider-card" },
+  fill(cards, ...s.providers.map((p) => el("label", { class: "provider-card" },
     el("input", { type: "radio", name: "provider", value: p.id, checked: p.id === s.provider }),
     el("b", {}, p.label), el("small", {}, desc[p.id]))));
-  $("#preset-select").replaceChildren(...s.presets.map((p) =>
+  fill($("#preset-select"), ...s.presets.map((p) =>
     el("option", { value: p.id, selected: p.id === s.preset }, p.label)));
   $("#base-url").value = s.base_url || "";
   $("#model-input").value = s.model || "";
@@ -160,7 +169,7 @@ function syncSettingsForm(changedPreset = false) {
   const keyInfo = current && s.has_key ? { source: s.key_source, hint: s.key_hint }
     : saved?.has_key ? { source: "saved", hint: saved.key_hint } : null;
   const stateEl = $("#key-state");
-  stateEl.replaceChildren();
+  fill(stateEl);
   if (state.clearKey) stateEl.append("저장 시 이 서비스의 키가 삭제됩니다.");
   else if (keyInfo) {
     stateEl.append(`${keyInfo.source === "env" ? "환경 변수" : "저장된"} 키 사용 중: ${keyInfo.hint} · 새로 입력하면 교체됩니다. `);
@@ -213,21 +222,25 @@ async function loadPersonas() {
 
 function renderPersonas() {
   const list = $("#persona-list");
-  list.replaceChildren(...state.personas.map((p) => {
+  fill(list, ...state.personas.map((p) => {
     const selected = state.selected.has(p.id);
     const desc = [p.occupation, `전문성 ${LEVELS[p.expertise_level]}`].filter(Boolean).join(" · ");
+    const member = currentAudience()?.members.find((m) => m.persona_id === p.id);
     return el("div", {
       class: "persona" + (selected ? " selected" : ""),
       title: p.needs ? `니즈: ${p.needs}` : "",
       onclick: () => {
         if (selected && state.selected.size > 1) state.selected.delete(p.id);
         else state.selected.add(p.id);
+        state.audience = null; // 개별로 고치면 그룹 선택은 풀린다
+        renderAudiences();
         renderPersonas();
       },
     },
       el("input", { type: "checkbox", checked: selected, tabindex: -1 }),
       el("span", { class: "icon" }, p.icon || "🙂"),
-      el("div", {}, el("div", { class: "name" }, p.name, p.builtin ? "" : " ✱"), el("div", { class: "desc" }, desc)),
+      el("div", {}, el("div", { class: "name" }, p.name, p.builtin ? "" : " ✱", member ? el("span", { class: "weight" }, `${member.weight}`) : null),
+        el("div", { class: "desc" }, desc)),
       el("div", { class: "actions" },
         el("button", { title: "복제해서 새로 만들기", onclick: (e) => { e.stopPropagation(); openPersonaDialog(p, true); } }, "⧉"),
         p.builtin ? null : el("button", { title: "수정", onclick: (e) => { e.stopPropagation(); openPersonaDialog(p, false); } }, "✎"),
@@ -235,6 +248,124 @@ function renderPersonas() {
       ),
     );
   }));
+}
+
+// ------------------------------------------------------------------ 청중 그룹
+
+function currentAudience() {
+  return state.audiences.find((a) => a.id === state.audience) || null;
+}
+
+async function loadAudiences() {
+  state.audiences = await api("/api/audiences");
+  if (state.audience && !currentAudience()) state.audience = null;
+  renderAudiences();
+}
+
+function renderAudiences() {
+  fill($("#audience-list"), 
+    ...state.audiences.map((a) => el("span", {
+      class: "chip" + (a.id === state.audience ? " selected" : ""),
+      title: a.members.map((m) => `${personaName(m.persona_id)} ${m.weight}`).join(" · "),
+      onclick: () => selectAudience(a.id),
+    }, `${a.icon} ${a.name}`,
+      el("button", { class: "edit", title: a.builtin ? "복제해서 새로 만들기" : "수정",
+        onclick: (e) => { e.stopPropagation(); openAudienceDialog(a, a.builtin); } }, a.builtin ? "⧉" : "✎"))),
+    el("span", { class: "chip add", onclick: () => openAudienceDialog() }, "+ 그룹"),
+  );
+}
+
+function personaName(id) {
+  const p = state.personas.find((x) => x.id === id);
+  return p ? `${p.icon} ${p.name}` : id;
+}
+
+function selectAudience(id) {
+  if (state.audience === id) {
+    state.audience = null;
+  } else {
+    const a = state.audiences.find((x) => x.id === id);
+    state.audience = id;
+    state.selected = new Set(a.members.map((m) => m.persona_id));
+    if (a.context && !$("#context-input").value.trim()) $("#context-input").value = a.context;
+  }
+  renderAudiences();
+  renderPersonas();
+}
+
+function openAudienceDialog(audience = null, duplicate = false) {
+  const form = $("#audience-form");
+  form.reset();
+  state.editingAudience = audience && !duplicate ? audience.id : null;
+  $("#audience-dialog-title").textContent = state.editingAudience ? "청중 그룹 수정" : duplicate ? "청중 그룹 복제" : "새 청중 그룹";
+  $("#audience-delete").hidden = !state.editingAudience;
+  form.elements.name.value = audience ? (duplicate ? `${audience.name} (복사본)` : audience.name) : "";
+  form.elements.icon.value = audience?.icon || "👥";
+  form.elements.context.value = audience?.context || "";
+  const weights = Object.fromEntries((audience?.members || []).map((m) => [m.persona_id, m.weight]));
+  fill($("#audience-members"), ...state.personas.map((p) => {
+    const on = p.id in weights;
+    const range = el("input", { type: "range", min: 1, max: 100, value: weights[p.id] || 20, disabled: !on, "data-id": p.id });
+    const out = el("output", {}, on ? weights[p.id] : "–");
+    const check = el("input", { type: "checkbox", checked: on, "data-id": p.id });
+    check.addEventListener("change", () => {
+      range.disabled = !check.checked;
+      syncAudienceSum();
+    });
+    range.addEventListener("input", syncAudienceSum);
+    return el("label", { class: "member-row" }, check, el("span", {}, `${p.icon} ${p.name}`), range, out);
+  }));
+  syncAudienceSum();
+  $("#audience-dialog").showModal();
+}
+
+function audienceMembers() {
+  return [...document.querySelectorAll("#audience-members .member-row")]
+    .filter((row) => row.querySelector("input[type=checkbox]").checked)
+    .map((row) => ({ persona_id: row.querySelector("input[type=checkbox]").dataset.id,
+      weight: Number(row.querySelector("input[type=range]").value) }));
+}
+
+function syncAudienceSum() {
+  const members = audienceMembers();
+  const total = members.reduce((a, m) => a + m.weight, 0);
+  for (const row of document.querySelectorAll("#audience-members .member-row")) {
+    const on = row.querySelector("input[type=checkbox]").checked;
+    const w = Number(row.querySelector("input[type=range]").value);
+    row.querySelector("output").textContent = on ? `${Math.round((100 * w) / Math.max(total, 1))}%` : "–";
+  }
+  $("#audience-sum").textContent = members.length
+    ? `${members.length}명 · 비율은 자동으로 100%가 되도록 맞춰집니다 (최대 8명)`
+    : "구성원을 한 명 이상 고르세요.";
+}
+
+async function saveAudience(e) {
+  e.preventDefault();
+  const form = $("#audience-form");
+  const body = { name: form.elements.name.value.trim(), icon: form.elements.icon.value.trim() || "👥",
+    context: form.elements.context.value.trim(), members: audienceMembers() };
+  if (!body.members.length) return toast("구성원을 한 명 이상 고르세요.");
+  try {
+    const saved = state.editingAudience
+      ? await api(`/api/audiences/${state.editingAudience}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+      : await api("/api/audiences", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    $("#audience-dialog").close();
+    await loadAudiences();
+    selectAudience(saved.id);
+    toast(`'${saved.name}' 청중 그룹을 저장했습니다.`);
+  } catch (err) {
+    toast(`저장 실패: ${err.message}`);
+  }
+}
+
+async function deleteAudience() {
+  const id = state.editingAudience;
+  if (!id || !confirm("이 청중 그룹을 삭제할까요?")) return;
+  await api(`/api/audiences/${id}`, { method: "DELETE" });
+  if (state.audience === id) state.audience = null;
+  $("#audience-dialog").close();
+  await loadAudiences();
+  renderPersonas();
 }
 
 function openPersonaDialog(persona = null, duplicate = false) {
@@ -312,7 +443,11 @@ async function savePersona(e) {
 
 async function deletePersona(p) {
   if (!confirm(`'${p.name}' 페르소나를 삭제할까요?`)) return;
-  await api(`/api/personas/${p.id}`, { method: "DELETE" });
+  try {
+    await api(`/api/personas/${p.id}`, { method: "DELETE" });
+  } catch (err) {
+    return toast(err.message, 5000);
+  }
   state.selected.delete(p.id);
   await loadPersonas();
 }
@@ -325,7 +460,7 @@ async function loadDocs() {
 }
 
 function renderDocs() {
-  $("#doc-list").replaceChildren(...state.docs.slice(0, 12).map((d) =>
+  fill($("#doc-list"), ...state.docs.slice(0, 12).map((d) =>
     el("div", { class: "doc-item" + (state.doc?.id === d.id ? " active" : ""), onclick: () => openDoc(d.id) },
       el("span", { class: "fn", title: d.filename }, `${d.filename}`, d.version > 1 ? el("span", { class: "vtag" }, `v${d.version}`) : null),
       el("span", { class: "muted" }, `${d.page_count}p`),
@@ -365,9 +500,10 @@ async function deleteDoc(d) {
   await loadDocs();
 }
 
-async function openDoc(id, personaId = null) {
+async function openDoc(id, personaId = null, audienceId = null) {
   state.doc = await api(`/api/documents/${id}`);
-  state.results = await api(`/api/documents/${id}/results`);
+  [state.results, state.docAudiences] = await Promise.all([
+    api(`/api/documents/${id}/results`), api(`/api/documents/${id}/audiences`)]);
   $("#empty").hidden = true;
   $("#viewer").hidden = false;
   $("#analyze-btn").disabled = false;
@@ -387,12 +523,15 @@ async function openDoc(id, personaId = null) {
     } catch (_) { /* 이전 버전이 삭제됨 */ }
   }
   renderDocs();
+  const aud = audienceId || (!personaId && state.activeAudience);
+  if (aud && state.docAudiences.some((a) => a.audience_id === aud)) return openAudience(aud);
   const pick = personaId || state.activePersona;
   const target = state.results.find((r) => r.persona_id === pick) || state.results[0];
   if (target) await openResult(target.persona_id);
   else {
     state.result = null;
     state.activePersona = null;
+    state.activeAudience = null;
     render();
   }
 }
@@ -401,20 +540,21 @@ async function openDoc(id, personaId = null) {
 
 async function startAnalysis() {
   if (!state.doc) return;
-  const body = { persona_ids: [...state.selected], context: $("#context-input").value };
+  const body = { persona_ids: state.audience ? [] : [...state.selected], audience_id: state.audience || "",
+    context: $("#context-input").value };
   $("#analyze-btn").disabled = true;
   try {
     const job = await api(`/api/documents/${state.doc.id}/analyze`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
-    pollJob(job.id, state.doc.id);
+    pollJob(job.id, state.doc.id, state.audience);
   } catch (err) {
     toast(`분석 시작 실패: ${err.message}`);
     $("#analyze-btn").disabled = false;
   }
 }
 
-function pollJob(jobId, docId) {
+function pollJob(jobId, docId, audienceId = null) {
   clearInterval(state.polling);
   const tick = async () => {
     let job;
@@ -431,7 +571,7 @@ function pollJob(jobId, docId) {
       clearInterval(state.polling);
       $("#analyze-btn").disabled = false;
       const firstDone = job.items.find((i) => i.status === "done");
-      if (state.doc?.id === docId) await openDoc(docId, firstDone?.persona_id);
+      if (state.doc?.id === docId) await openDoc(docId, audienceId ? null : firstDone?.persona_id, audienceId);
       await loadDocs();
       if (job.status === "done") {
         setProgress([]);
@@ -444,7 +584,7 @@ function pollJob(jobId, docId) {
 }
 
 function setProgress(items) {
-  $("#progress").replaceChildren(...items.map((i) => {
+  fill($("#progress"), ...items.map((i) => {
     const pct = i.status === "done" ? 100 : Math.round((i.done / Math.max(i.total, 1)) * 100);
     const label = { queued: "대기 중", running: "분석 중…", done: "완료", error: "실패" }[i.status] || "";
     return el("div", {},
@@ -456,7 +596,15 @@ function setProgress(items) {
 
 // ------------------------------------------------------------------ 결과 표시
 
+async function openAudience(audienceId) {
+  state.activeAudience = audienceId;
+  state.activePersona = null;
+  state.result = await api(`/api/documents/${state.doc.id}/audiences/${audienceId}`);
+  render();
+}
+
 async function openResult(personaId) {
+  state.activeAudience = null;
   state.activePersona = personaId;
   state.result = await api(`/api/documents/${state.doc.id}/results/${personaId}`);
   render();
@@ -480,7 +628,10 @@ function render() {
 }
 
 function renderTabs() {
-  $("#tabs").replaceChildren(...state.results.map((r) =>
+  fill($("#tabs"), ...state.docAudiences.map((a) =>
+    el("button", { class: "tab aud" + (a.audience_id === state.activeAudience ? " active" : ""), onclick: () => openAudience(a.audience_id),
+      title: "청중 그룹 종합" }, `${a.icon} ${a.name} 종합`, el("span", { class: "score" }, a.score))),
+  ...state.results.map((r) =>
     el("button", { class: "tab" + (r.persona_id === state.activePersona ? " active" : ""), onclick: () => openResult(r.persona_id) },
       `${r.icon || ""} ${r.persona_name}`, el("span", { class: "score" }, r.score))));
 }
@@ -489,13 +640,13 @@ function renderOverall() {
   const box = $("#overall");
   const r = state.result;
   if (!r) {
-    box.replaceChildren(el("div", { class: "muted", style: "grid-column:1/-1" },
+    fill(box, el("div", { class: "muted", style: "grid-column:1/-1" },
       "아직 분석 결과가 없습니다. 왼쪽에서 페르소나를 고르고 '분석 시작'을 누르세요."));
     return;
   }
   const o = r.overall;
   const color = scoreColor(o.score);
-  box.replaceChildren(
+  fill(box, 
     el("div", {},
       el("div", { class: "score-ring", style: `background: conic-gradient(${color} ${o.score * 3.6}deg, #eceef2 0)` },
         el("div", { style: "background:#fff;border-radius:50%;width:84px;height:84px;display:grid;place-items:center;color:" + color },
@@ -504,6 +655,10 @@ function renderOverall() {
     el("div", {},
       o.first_impression ? [el("h3", {}, `${r.persona.icon || ""} ${r.persona.name}의 첫인상`), el("p", {}, o.first_impression)] : null,
       o.summary ? [el("h3", {}, "종합 평가"), el("p", {}, o.summary)] : null,
+      r.audience ? [el("h3", {}, "구성원 (비중 · 점수)"), el("div", { class: "members" }, ...r.audience.members.map((m) =>
+        el("div", { class: "member" }, el("span", {}, `${m.icon} ${m.name}`),
+          el("span", { class: "share", title: `비중 ${m.share}%` }, el("i", { style: `width:${m.share}%` })),
+          el("b", {}, m.score))))] : null,
       el("p", { class: "muted" }, `${r.engine ? `분석: ${r.engine}` : "데모 모드(규칙 기반)"} · ${r.created_at}`),
       el("div", { class: "cols" },
         o.top_fixes?.length ? el("div", {}, el("h3", {}, "우선 고칠 것"), el("ol", {}, ...o.top_fixes.map((t) => el("li", {}, t)))) : null,
@@ -517,8 +672,8 @@ function renderOverall() {
 
 function renderFilters() {
   const box = $("#filters");
-  if (!state.result) return box.replaceChildren();
-  box.replaceChildren(...["critical", "warning", "suggestion"].map((s) =>
+  if (!state.result) return fill(box);
+  fill(box, ...["critical", "warning", "suggestion"].map((s) =>
     el("label", {},
       el("input", { type: "checkbox", checked: state.filter.has(s), onchange: (e) => {
         e.target.checked ? state.filter.add(s) : state.filter.delete(s);
@@ -534,7 +689,7 @@ function visibleIssues(page) {
 
 function renderPages() {
   const byPage = Object.fromEntries((state.result?.pages || []).map((p) => [p.page, p]));
-  $("#pages").replaceChildren(...state.doc.pages.map((pg) => {
+  fill($("#pages"), ...state.doc.pages.map((pg) => {
     const rp = byPage[pg.index];
     const issues = visibleIssues(rp);
     // 같은 영역을 가리키는 지적이 여러 개면 번호 배지를 옆으로 나란히 놓는다
@@ -561,16 +716,17 @@ function renderPages() {
 
 function renderMemos() {
   const box = $("#memos");
-  if (!state.result) return box.replaceChildren();
+  if (!state.result) return fill(box);
   const issues = state.result.pages.flatMap(visibleIssues);
-  if (!issues.length) return box.replaceChildren(el("div", { class: "memos-empty" }, "표시할 지적사항이 없습니다."));
-  box.replaceChildren(...issues.map((i) => el("div", {
+  if (!issues.length) return fill(box, el("div", { class: "memos-empty" }, "표시할 지적사항이 없습니다."));
+  fill(box, ...issues.map((i) => el("div", {
     class: `memo ${i.severity}`, id: `memo-${i.n}`,
     onmouseenter: () => highlight(i.n, false), onmouseleave: () => highlight(null),
     onclick: () => highlight(i.n, "box"),
   },
     el("div", { class: "memo-head" }, el("span", { class: "n" }, `#${i.n}`), el("span", { class: "title" }, i.title)),
     el("div", { class: "memo-meta" }, `p.${i.page} · ${SEV[i.severity]} · ${i.category}`),
+    i.voices ? el("div", { class: "voices" }, `👥 청중의 ${i.share}%가 지적 · `, i.voices.map((v) => `${v.icon} ${v.name}`).join(", ")) : null,
     el("dl", {},
       el("dt", {}, "왜 문제인가"), el("dd", {}, i.reason),
       i.suggestion ? [el("dt", {}, "이렇게 고치세요"), el("dd", {}, i.suggestion)] : null),
@@ -591,9 +747,10 @@ function highlight(n, scrollTo) {
 
 function renderExports() {
   const box = $("#exports");
-  if (!state.result) return box.replaceChildren();
-  const base = `/api/documents/${state.doc.id}/results/${state.activePersona}`;
-  box.replaceChildren(
+  if (!state.result) return fill(box);
+  const base = state.activeAudience ? `/api/documents/${state.doc.id}/audiences/${state.activeAudience}`
+    : `/api/documents/${state.doc.id}/results/${state.activePersona}`;
+  fill(box, 
     el("a", { class: "btn", href: `${base}/export.pdf` }, "⬇ 주석 PDF"),
     el("a", { class: "btn", href: `${base}/export.json` }, "⬇ JSON"),
   );
@@ -602,7 +759,7 @@ function renderExports() {
 async function renderCompare() {
   const box = $("#compare");
   box.hidden = true;
-  if (!state.result || !state.doc.parent_id) return;
+  if (!state.result || !state.doc.parent_id || state.activeAudience) return;
   const docId = state.doc.id;
   const personaId = state.activePersona;
   let c;
@@ -617,7 +774,7 @@ async function renderCompare() {
   const item = (i, link) => el("li", link ? { class: "link", onclick: () => highlight(i.n, "box") } : {},
     `#${i.n} ${i.title} `, el("span", { class: "tag" }, `p.${i.page} ${sevLabel(i)}`));
   const changeText = { better: " (완화됨)", worse: " (악화됨)", same: "" };
-  box.replaceChildren(
+  fill(box, 
     el("div", { class: "compare-head" },
       el("h3", {}, `v${c.prev.version} → v${c.cur.version} 비교`),
       el("span", { class: `delta ${d > 0 ? "up" : d < 0 ? "down" : ""}` }, `${c.prev.score} → ${c.cur.score} (${d > 0 ? "+" : ""}${d})`),
@@ -646,6 +803,9 @@ function bind() {
   $("#persona-form").addEventListener("submit", savePersona);
   $("#persona-form").addEventListener("input", syncRangeOutputs);
   $("#autofill-btn").addEventListener("click", autofillPersona);
+  $("#audience-form").addEventListener("submit", saveAudience);
+  $("#audience-cancel").addEventListener("click", () => $("#audience-dialog").close());
+  $("#audience-delete").addEventListener("click", deleteAudience);
   $("#autofill-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -689,6 +849,7 @@ function bind() {
   bind();
   try {
     await Promise.all([loadStatus(), loadPersonas(), loadDocs()]);
+    await loadAudiences();
     route();
   } catch (err) {
     toast(`서버 연결 실패: ${err.message}`);
@@ -707,7 +868,7 @@ function seqStep(score) {
 function bindTip(node, html) {
   const tip = $("#tooltip");
   node.addEventListener("mousemove", (e) => {
-    tip.replaceChildren(...html());
+    fill(tip, ...html());
     tip.hidden = false;
     const x = Math.min(e.clientX + 14, window.innerWidth - tip.offsetWidth - 8);
     const y = Math.min(e.clientY + 14, window.innerHeight - tip.offsetHeight - 8);
@@ -724,7 +885,7 @@ async function loadDashboard() {
   try {
     d = await api("/api/stats");
   } catch (err) {
-    box.replaceChildren(el("div", { class: "dash-empty" }, `불러오기 실패: ${err.message}`));
+    fill(box, el("div", { class: "dash-empty" }, `불러오기 실패: ${err.message}`));
     return;
   }
   const t = d.totals;
@@ -732,12 +893,12 @@ async function loadDashboard() {
     el("h1", {}, "대시보드"),
     el("span", { class: "muted" }, state.status?.mode === "ai" ? `분석 엔진: ${state.status.engine}` : "데모 모드 (AI 미연결)"));
   if (!t.analyses) {
-    box.replaceChildren(head, el("div", { class: "card dash-empty" },
+    fill(box, head, el("div", { class: "card dash-empty" },
       el("p", {}, "아직 분석한 자료가 없습니다."),
       el("a", { class: "btn primary", href: "#analyze" }, "자료 분석하러 가기")));
     return;
   }
-  box.replaceChildren(
+  fill(box, 
     head,
     el("div", { class: "kpis" },
       kpi("분석한 자료", t.documents, `분석 ${t.analyses}회`),
