@@ -362,9 +362,19 @@ def _analyze_demo(pages: list[dict], persona: Persona) -> dict:
                                       "데모 모드는 추출된 텍스트만 검사합니다. API 키를 설정하면 그림·차트까지 분석합니다.",
                                       "ANTHROPIC_API_KEY 를 설정하고 다시 분석하세요.", "이 그림은 무슨 뜻이지?",
                                       bbox={"x": 0, "y": 0, "w": 1, "h": 1}))
+        # 아주 작은 글씨(각주 등)는 블록별로, 조금 작은 글씨는 페이지당 하나로 묶어 지적한다
+        smallish = [b for b in blocks if b.get("font_size") and 10 <= b["font_size"] < small_limit]
+        if smallish:
+            sizes = sorted({b["font_size"] for b in smallish})
+            issues.append(_demo_issue([b["id"] for b in smallish], "warning", "가독성",
+                                      "전반적으로 글자가 작습니다",
+                                      f"글자 크기 {sizes[0]}~{sizes[-1]} 인 텍스트가 {len(smallish)}곳 있어 "
+                                      f"{persona.name}에게는 읽기 버겁습니다.",
+                                      f"본문은 {small_limit + 4} 이상으로 키우고, 표는 핵심 수치만 남기세요.",
+                                      "눈이 침침해서 잘 안 보이네."))
         for b in blocks:
             text = b["text"]
-            if b.get("font_size") and b["font_size"] < small_limit:
+            if b.get("font_size") and b["font_size"] < 10:
                 issues.append(_demo_issue([b["id"]], "critical" if elderly else "warning", "가독성",
                                           "글자가 너무 작습니다",
                                           f"글자 크기 {b['font_size']}로, {persona.name}에게는 읽기 어렵습니다. "
@@ -401,6 +411,7 @@ def _analyze_demo(pages: list[dict], persona: Persona) -> dict:
                                           "숫자만 잔뜩이네."))
         weights = {"critical": 12, "warning": 6, "suggestion": 2}
         penalty += sum(weights[i["severity"]] for i in issues)
+        issues.sort(key=lambda i: SEVERITIES.index(i["severity"]))
         out_pages.append({"page": page["index"], "page_comment": "", "issues": issues[:8]})
     score = max(5, 100 - penalty // max(len(pages), 1))
     return {
