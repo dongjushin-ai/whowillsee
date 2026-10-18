@@ -298,3 +298,10 @@ dialog h2 { margin-top: 0; }
 .trend-steps { display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; flex-wrap: wrap; }
 .trend-steps .step-score { font-weight: 700; }
 @media (max-width: 800px) { .compare-cols { grid-template-columns: 1fr; } }
+
+/* ---------- 페르소나 자동 채우기 ---------- */
+.autofill { background: var(--accent-soft); border-radius: var(--radius); padding: 12px; margin-bottom: 14px; }
+.autofill label { font-size: 13px; font-weight: 700; display: block; margin-bottom: 6px; }
+.autofill-row { display: flex; gap: 6px; }
+.autofill-row input { flex: 1; min-width: 0; }
+.autofill small { display: block; margin-top: 6px; }

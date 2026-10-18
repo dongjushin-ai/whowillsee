@@ -240,6 +240,8 @@ function renderPersonas() {
 function openPersonaDialog(persona = null, duplicate = false) {
   const form = $("#persona-form");
   form.reset();
+  $("#autofill-input").value = "";
+  $("#autofill-msg").textContent = "";
   state.editing = persona && !duplicate ? persona.id : null;
   $("#persona-dialog-title").textContent = state.editing ? "페르소나 수정" : duplicate ? "페르소나 복제" : "새 페르소나";
   if (persona) {
@@ -250,6 +252,35 @@ function openPersonaDialog(persona = null, duplicate = false) {
   }
   syncRangeOutputs();
   $("#persona-dialog").showModal();
+}
+
+async function autofillPersona() {
+  const desc = $("#autofill-input").value.trim();
+  const msg = $("#autofill-msg");
+  if (desc.length < 2) {
+    msg.textContent = "설명을 조금 더 적어주세요.";
+    return;
+  }
+  const btn = $("#autofill-btn");
+  btn.disabled = true;
+  msg.textContent = state.status?.mode === "ai" ? "AI가 페르소나를 구체화하는 중…" : "초안을 만드는 중…";
+  try {
+    const r = await api("/api/personas/generate", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ description: desc }),
+    });
+    const form = $("#persona-form");
+    for (const [k, v] of Object.entries(r.persona)) {
+      if (form.elements[k]) form.elements[k].value = v;
+    }
+    syncRangeOutputs();
+    msg.textContent = r.engine
+      ? `${r.engine} 가 채웠습니다. 확인하고 고친 뒤 저장하세요.`
+      : "규칙 기반 초안입니다. AI를 연결하면 모든 항목을 더 구체적으로 채웁니다. 확인 후 저장하세요.";
+  } catch (err) {
+    msg.textContent = `자동 채우기 실패: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function syncRangeOutputs() {
@@ -614,6 +645,13 @@ function bind() {
   $("#persona-cancel").addEventListener("click", () => $("#persona-dialog").close());
   $("#persona-form").addEventListener("submit", savePersona);
   $("#persona-form").addEventListener("input", syncRangeOutputs);
+  $("#autofill-btn").addEventListener("click", autofillPersona);
+  $("#autofill-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      autofillPersona();
+    }
+  });
   $("#analyze-btn").addEventListener("click", startAnalysis);
 
   $("#version-input").addEventListener("change", (e) => {

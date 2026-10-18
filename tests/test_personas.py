@@ -36,3 +36,31 @@ def test_validation():
         personas.PersonaIn(name="", expertise_level=3)
     with pytest.raises(ValueError):
         personas.PersonaIn(name="a", expertise_level=9)
+
+
+def test_rule_based_generation():
+    from app import persona_gen
+
+    p, engine = persona_gen.generate("70대 독거 어르신, 스마트폰 서툼")
+    assert engine is None
+    assert p.age_group == "70대" and p.icon == "👵" and p.digital_literacy == 1
+    assert p.name == "70대 독거 어르신" and p.personality == "스마트폰 서툼"
+    p, _ = persona_gen.generate("예산 결재권자인 구청 국장")
+    assert p.occupation == "경영·관리" and p.expertise_level == 3
+
+
+def test_ai_generation_is_clamped(monkeypatch):
+    from app import persona_gen, providers
+
+    class Fake:
+        engine = "Fake · m"
+
+        def complete_json(self, system, content, schema, max_tokens=0):
+            assert "설명: 간호사" in content[0]["text"]
+            return {"name": "야간 근무 간호사", "icon": "🩺", "occupation": "간호사", "expertise_level": 9,
+                    "digital_literacy": "x", "needs": "근무 중 짧게 확인"}
+
+    monkeypatch.setattr(providers, "get_provider", lambda s=None: Fake())
+    p, engine = persona_gen.generate("간호사")
+    assert engine == "Fake · m"
+    assert p.expertise_level == 5 and p.digital_literacy == 3 and p.needs == "근무 중 짧게 확인"

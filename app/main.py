@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import analyzer, compare, converter, exporter, personas, providers, stats, storage
+from . import analyzer, compare, converter, exporter, persona_gen, personas, providers, stats, storage
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -96,6 +96,20 @@ def list_personas():
 @app.post("/api/personas", status_code=201)
 def create_persona(data: personas.PersonaIn):
     return personas.create_persona(data).model_dump()
+
+
+class GenerateRequest(BaseModel):
+    description: str = Field(min_length=2, max_length=500)
+
+
+@app.post("/api/personas/generate")
+def generate_persona(req: GenerateRequest):
+    """저장하지 않고 초안만 돌려준다 - 사용자가 폼에서 검토 후 저장한다."""
+    try:
+        persona, engine = persona_gen.generate(req.description)
+    except providers.ProviderError as exc:
+        raise HTTPException(502, str(exc)) from None
+    return {"persona": persona.model_dump(), "engine": engine}
 
 
 @app.put("/api/personas/{persona_id}")

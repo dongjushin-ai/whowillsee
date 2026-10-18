@@ -156,6 +156,14 @@
 <dialog id="persona-dialog">
   <form id="persona-form" method="dialog">
     <h2 id="persona-dialog-title">새 페르소나</h2>
+    <div class="autofill">
+      <label for="autofill-input">✨ 한 줄로 설명하면 나머지를 채워드려요</label>
+      <div class="autofill-row">
+        <input id="autofill-input" placeholder="예) 예산 결재권을 가진 50대 구청 국장, 숫자에 깐깐함">
+        <button type="button" class="btn" id="autofill-btn">자동 채우기</button>
+      </div>
+      <small id="autofill-msg" class="muted"></small>
+    </div>
     <div class="grid">
       <label class="span2">이름 *<input name="name" required maxlength="60" placeholder="예) 30대 맞벌이 학부모"></label>
       <label>아이콘<input name="icon" maxlength="8" placeholder="🙂"></label>
