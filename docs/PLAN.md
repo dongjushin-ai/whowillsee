@@ -50,11 +50,11 @@ FastAPI 서버 (app/main.py)
 - [x] 디렉터리 구조, requirements.txt, .gitignore
 
 ### Step 2. 파일 변환기
-- [ ] PDF → 페이지 PNG + 텍스트 블록(+글자 크기)
-- [ ] 이미지 → 단일 페이지 (큰 이미지 축소)
-- [ ] PPT/PPTX/ODP/DOCX → LibreOffice → PDF
-- [ ] HTML → Playwright 전체 스크린샷, 긴 페이지 분할, DOM 텍스트 블록
-- [ ] 변환기 테스트
+- [x] PDF → 페이지 PNG + 텍스트 블록(+글자 크기)
+- [x] 이미지 → 단일 페이지 (큰 이미지 축소)
+- [x] PPT/PPTX/ODP/DOCX → LibreOffice → PDF
+- [x] HTML → Playwright 전체 스크린샷, 긴 페이지 분할, DOM 텍스트 블록
+- [x] 변환기 테스트
 
 ### Step 3. 페르소나
 - [ ] 페르소나 스키마 (직군·소속·성격·니즈·취향·전문성·연령·디지털 숙련도·관심사·우려·상황 등)
