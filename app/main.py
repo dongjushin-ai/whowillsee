@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import analyzer, converter, exporter, personas, storage
+from . import analyzer, converter, exporter, personas, providers, storage
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -45,12 +45,40 @@ def _doc_meta(doc_id: str) -> dict:
 
 @app.get("/api/status")
 def status():
+    ai = providers.describe(providers.load_settings())
     return {
-        "mode": "claude" if analyzer.use_claude() else "demo",
-        "model": analyzer.MODEL if analyzer.use_claude() else None,
+        "mode": "ai" if ai["ready"] else "demo",
+        "engine": ai["engine"] if ai["ready"] else None,
+        "ai": ai,
         "office": converter.soffice_path() is not None,
         "formats": sorted(converter.SUPPORTED_EXTS),
     }
+
+
+# ------------------------------------------------------------------ AI 연결 설정
+
+@app.get("/api/settings")
+def get_settings():
+    return providers.describe(providers.load_settings()) | {
+        "providers": providers.PROVIDERS, "presets": providers.OPENAI_PRESETS, "efforts": providers.EFFORTS,
+    }
+
+
+@app.put("/api/settings")
+def put_settings(update: providers.SettingsUpdate):
+    if providers.settings_locked():
+        raise HTTPException(403, "이 서버는 AI 설정이 잠겨 있습니다 (WHOWILLSEE_LOCK_SETTINGS).")
+    return providers.describe(providers.save_settings(update))
+
+
+@app.post("/api/settings/test")
+def test_settings(update: providers.SettingsUpdate):
+    if providers.settings_locked():
+        raise HTTPException(403, "이 서버는 AI 설정이 잠겨 있습니다 (WHOWILLSEE_LOCK_SETTINGS).")
+    try:
+        return providers.test_connection(providers.merge_for_test(update))
+    except providers.ProviderError as exc:
+        return {"ok": False, "message": str(exc), "latency_ms": 0}
 
 
 # ------------------------------------------------------------------ 페르소나

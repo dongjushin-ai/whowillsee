@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import analyzer, converter, personas
+from app import analyzer, converter, personas, providers
 from app.personas import get_persona
 
 
@@ -86,14 +86,15 @@ def test_claude_path_batches_and_merges(briefing, monkeypatch):
 
     fake = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(stream=stream)))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
-    monkeypatch.setattr(analyzer, "_client", lambda: fake)
+    monkeypatch.setattr(providers, "_anthropic_client", lambda key: fake)
     monkeypatch.setattr(analyzer, "PAGES_PER_CALL", 1)
     progress = []
     result = analyzer.analyze(doc, path, get_persona("general-citizen"), "주민설명회",
                               progress=lambda d, t: progress.append((d, t)))
-    assert result["mode"] == "claude"
+    assert result["mode"] == "ai"
+    assert "Claude" in result["engine"]
     assert len(calls) == 3  # 페이지 2묶음 + 종합 1회
-    assert calls[0]["model"] == analyzer.MODEL
+    assert calls[0]["model"] == providers.ANTHROPIC_DEFAULT_MODEL
     assert calls[0]["fallbacks"] == "default"
     assert "주민설명회" in calls[0]["messages"][0]["content"][0]["text"]
     assert result["overall"]["score"] == 42
@@ -110,6 +111,6 @@ def test_refusal_raises(briefing, monkeypatch):
 
     fake = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(stream=lambda **k: Refusing({}, []))))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
-    monkeypatch.setattr(analyzer, "_client", lambda: fake)
+    monkeypatch.setattr(providers, "_anthropic_client", lambda key: fake)
     with pytest.raises(analyzer.AnalysisError):
         analyzer.analyze(doc, path, get_persona("general-citizen"))

@@ -14,6 +14,9 @@ const state = {
   filter: new Set(["critical", "warning", "suggestion"]),
   editing: null,     // 수정 중인 페르소나 id
   polling: null,
+  status: null,
+  settings: null,
+  clearKey: false,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -57,13 +60,143 @@ function toast(msg, ms = 3500) {
 
 async function loadStatus() {
   const s = await api("/api/status");
+  state.status = s;
   const badge = $("#mode-badge");
-  if (s.mode === "claude") {
-    badge.textContent = `Claude 분석 · ${s.model}`;
+  badge.classList.toggle("demo", s.mode !== "ai");
+  badge.textContent = s.mode === "ai" ? `AI 연결됨 · ${s.engine}` : "데모 모드 (AI 미연결)";
+  badge.title = "AI 연결 설정 열기";
+  $("#ai-banner").hidden = s.mode === "ai" || location.hash === "#settings";
+}
+
+// ------------------------------------------------------------------ 화면 전환
+
+const VIEWS = ["analyze", "dashboard", "settings"];
+
+function route() {
+  const view = VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "analyze";
+  for (const v of VIEWS) $(`#view-${v}`).hidden = v !== view;
+  document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === view));
+  $("#ai-banner").hidden = state.status?.mode === "ai" || view === "settings";
+  if (view === "settings") loadSettings();
+  if (view === "dashboard") loadDashboard();
+}
+
+// ------------------------------------------------------------------ AI 연결 설정
+
+async function loadSettings() {
+  const s = await api("/api/settings");
+  state.settings = s;
+  const cards = $("#provider-cards");
+  const desc = {
+    anthropic: "Claude API 키로 연결합니다. 이미지와 텍스트를 함께 읽어 가장 정확하게 분석합니다.",
+    openai_compatible: "OpenAI, Gemini, OpenRouter, Ollama·LM Studio(내 컴퓨터) 등 OpenAI 형식 API.",
+    demo: "AI 없이 규칙(전문용어·글자 크기·누락 정보)만으로 점검합니다.",
+  };
+  cards.replaceChildren(...s.providers.map((p) => el("label", { class: "provider-card" },
+    el("input", { type: "radio", name: "provider", value: p.id, checked: p.id === s.provider }),
+    el("b", {}, p.label), el("small", {}, desc[p.id]))));
+  $("#preset-select").replaceChildren(...s.presets.map((p) =>
+    el("option", { value: p.id, selected: p.id === s.preset }, p.label)));
+  $("#base-url").value = s.base_url || "";
+  $("#model-input").value = s.model || "";
+  state.settingsSlot = slotOf(s.provider, s.preset);
+  $("#effort-select").value = s.effort ?? "medium";
+  $("#key-input").value = "";
+  $("#settings-msg").hidden = true;
+  $("#settings-locked").hidden = !s.locked;
+  for (const x of $("#settings-form").elements) x.disabled = s.locked;
+  syncSettingsForm();
+}
+
+function settingsFormValue() {
+  const f = $("#settings-form");
+  const provider = f.querySelector("input[name=provider]:checked")?.value || "demo";
+  const key = $("#key-input").value.trim();
+  return {
+    provider,
+    preset: $("#preset-select").value,
+    base_url: $("#base-url").value.trim(),
+    model: $("#model-input").value.trim(),
+    effort: $("#effort-select").value,
+    api_key: state.clearKey ? "" : key || null, // null = 저장된 키 유지
+  };
+}
+
+function slotOf(provider, preset) {
+  return provider === "openai_compatible" ? `openai:${preset}` : provider;
+}
+
+function syncSettingsForm(changedPreset = false) {
+  const s = state.settings;
+  const v = settingsFormValue();
+  // 서비스를 바꾸면 그 서비스에 저장된 모델·키 상태를 불러온다 (키는 서비스별로 따로 저장됨)
+  const slot = slotOf(v.provider, v.preset);
+  if (slot !== state.settingsSlot) {
+    state.settingsSlot = slot;
+    state.clearKey = false;
+    $("#model-input").value = s.slots[slot]?.model || "";
+    $("#key-input").value = "";
+  }
+  document.querySelectorAll("#settings-form .field-group").forEach((g) => {
+    g.hidden = !g.dataset.for.split(" ").includes(v.provider);
+  });
+  const preset = s.presets.find((p) => p.id === v.preset) || s.presets.at(-1);
+  if (changedPreset) $("#base-url").value = "";
+  $("#base-url").placeholder = preset.base_url || "https://…/v1";
+  const anthropic = s.providers.find((p) => p.id === "anthropic");
+  const keyUrl = v.provider === "anthropic" ? anthropic.key_url : preset.key_url;
+  const link = $("#key-link");
+  link.textContent = keyUrl ? "(키 발급 ↗)" : "";
+  link.href = keyUrl || "#";
+  if (v.provider === "anthropic") {
+    $("#model-input").placeholder = anthropic.default_model;
+    $("#model-hint").textContent = `비워두면 ${anthropic.default_model}`;
   } else {
-    badge.textContent = "데모 모드 (API 키 없음)";
-    badge.classList.add("demo");
-    badge.title = "ANTHROPIC_API_KEY 를 설정하고 서버를 재시작하면 실제 Claude 분석을 사용합니다.";
+    $("#model-input").placeholder = preset.model_hint;
+    $("#model-hint").textContent = preset.needs_key ? "" : "이 서비스는 보통 API 키가 필요 없습니다.";
+  }
+  const current = slot === slotOf(s.provider, s.preset);
+  const saved = s.slots[slot];
+  const keyInfo = current && s.has_key ? { source: s.key_source, hint: s.key_hint }
+    : saved?.has_key ? { source: "saved", hint: saved.key_hint } : null;
+  const stateEl = $("#key-state");
+  stateEl.replaceChildren();
+  if (state.clearKey) stateEl.append("저장 시 이 서비스의 키가 삭제됩니다.");
+  else if (keyInfo) {
+    stateEl.append(`${keyInfo.source === "env" ? "환경 변수" : "저장된"} 키 사용 중: ${keyInfo.hint} · 새로 입력하면 교체됩니다. `);
+    if (keyInfo.source === "saved") stateEl.append(el("a", { href: "#", onclick: (e) => { e.preventDefault(); state.clearKey = true; syncSettingsForm(); } }, "키 삭제"));
+  }
+}
+
+function showSettingsMsg(kind, text) {
+  const m = $("#settings-msg");
+  m.className = `note ${kind}`;
+  m.textContent = text;
+  m.hidden = false;
+}
+
+async function testSettings() {
+  showSettingsMsg("", "연결 테스트 중… (작은 이미지 1장을 보내 확인합니다)");
+  try {
+    const r = await api("/api/settings/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settingsFormValue()) });
+    showSettingsMsg(r.ok ? "ok" : "err", r.ok ? `✓ ${r.message} · ${(r.latency_ms / 1000).toFixed(1)}초` : `✕ ${r.message}`);
+  } catch (err) {
+    showSettingsMsg("err", `✕ ${err.message}`);
+  }
+}
+
+async function saveSettings(e) {
+  e.preventDefault();
+  try {
+    const r = await api("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settingsFormValue()) });
+    state.clearKey = false;
+    await loadStatus();
+    await loadSettings();
+    showSettingsMsg(r.provider === "demo" || r.ready ? "ok" : "err",
+      r.provider === "demo" ? "저장했습니다. 데모 모드로 분석합니다."
+        : r.ready ? `저장했습니다. 이제 ${r.engine} 로 분석합니다.` : `저장했지만 아직 사용할 수 없습니다: ${r.problems.join(" ")}`);
+  } catch (err) {
+    showSettingsMsg("err", `저장 실패: ${err.message}`);
   }
 }
 
@@ -325,13 +458,14 @@ function renderOverall() {
     el("div", {},
       o.first_impression ? [el("h3", {}, `${r.persona.icon || ""} ${r.persona.name}의 첫인상`), el("p", {}, o.first_impression)] : null,
       o.summary ? [el("h3", {}, "종합 평가"), el("p", {}, o.summary)] : null,
+      el("p", { class: "muted" }, `${r.engine ? `분석: ${r.engine}` : "데모 모드(규칙 기반)"} · ${r.created_at}`),
       el("div", { class: "cols" },
         o.top_fixes?.length ? el("div", {}, el("h3", {}, "우선 고칠 것"), el("ol", {}, ...o.top_fixes.map((t) => el("li", {}, t)))) : null,
         o.strengths?.length ? el("div", {}, el("h3", {}, "잘된 점"), el("ul", {}, ...o.strengths.map((t) => el("li", {}, t)))) : null,
       ),
     ),
     r.mode === "demo" ? el("div", { class: "demo-note" },
-      "데모 모드 결과입니다. 텍스트 규칙(전문용어·글자 크기·정보 밀도·누락 정보)만으로 추정했습니다. ANTHROPIC_API_KEY 를 설정하면 Claude 가 페르소나가 되어 이미지까지 읽고 분석합니다.") : null,
+      "데모 모드 결과입니다. 텍스트 규칙(전문용어·글자 크기·정보 밀도·누락 정보)만으로 추정했습니다. 상단 'AI 연결'에서 내 AI를 연결하면 페르소나가 이미지까지 읽고 분석합니다.") : null,
   );
 }
 
@@ -437,6 +571,13 @@ function bind() {
   for (const ev of ["dragleave", "drop"]) dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove("over"); });
   dz.addEventListener("drop", (e) => { if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]); });
 
+  window.addEventListener("hashchange", route);
+  $("#settings-form").addEventListener("change", (e) => {
+    syncSettingsForm(e.target.id === "preset-select");
+  });
+  $("#settings-form").addEventListener("submit", saveSettings);
+  $("#test-btn").addEventListener("click", testSettings);
+
   $("#url-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const url = $("#url-input").value.trim();
@@ -451,7 +592,12 @@ function bind() {
   bind();
   try {
     await Promise.all([loadStatus(), loadPersonas(), loadDocs()]);
+    route();
   } catch (err) {
     toast(`서버 연결 실패: ${err.message}`);
   }
 })();
+
+// ------------------------------------------------------------------ 대시보드 (Step 10에서 구현)
+
+async function loadDashboard() {}

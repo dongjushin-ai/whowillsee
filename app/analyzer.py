@@ -1,6 +1,6 @@
 """페르소나 관점에서 자료를 분석해 지적사항(박스 + 메모)을 만든다.
 
-- ANTHROPIC_API_KEY 등 자격 증명이 있으면 Claude Vision 으로 분석한다.
+- 사용자가 연결한 AI(providers.py: Claude 또는 OpenAI 호환)가 있으면 그 AI 로 분석한다.
 - 없으면 텍스트 블록 기반 휴리스틱 '데모 모드'로 동작한다.
 """
 from __future__ import annotations
@@ -13,10 +13,9 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from . import providers
 from .personas import Persona
 
-MODEL = os.environ.get("WHOWILLSEE_MODEL", "claude-opus-5-5")
-EFFORT = os.environ.get("WHOWILLSEE_EFFORT", "medium")
 PAGES_PER_CALL = int(os.environ.get("WHOWILLSEE_PAGES_PER_CALL", "6"))
 MAX_BLOCK_CHARS = 400
 
@@ -33,27 +32,26 @@ class AnalysisError(Exception):
 
 # ====================================================================== 공통
 
-def use_claude() -> bool:
-    if os.environ.get("WHOWILLSEE_DEMO") == "1":
-        return False
-    return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
-
-
 def analyze(doc: dict, doc_path: Path, persona: Persona, context: str = "",
             progress: ProgressFn | None = None) -> dict:
     """문서 메타(doc)와 페르소나로 분석 결과 dict 를 만든다."""
     progress = progress or (lambda done, total: None)
     pages = doc["pages"]
-    if use_claude():
-        raw, mode, model = _analyze_with_claude(pages, doc_path, persona, context, progress), "claude", MODEL
+    try:
+        provider = providers.get_provider()
+    except providers.ProviderError as exc:
+        raise AnalysisError(str(exc)) from exc
+    if provider:
+        raw = _analyze_with_ai(provider, pages, doc_path, persona, context, progress)
+        mode, engine = "ai", provider.engine
     else:
-        raw, mode, model = _analyze_demo(pages, persona), "demo", None
+        raw, mode, engine = _analyze_demo(pages, persona), "demo", None
         progress(1, 1)
-    return finalize(raw, pages, persona, mode, model, context)
+    return finalize(raw, pages, persona, mode, engine, context)
 
 
 def finalize(raw: dict, pages: list[dict], persona: Persona, mode: str,
-             model: str | None, context: str) -> dict:
+             engine: str | None, context: str) -> dict:
     """모델/휴리스틱의 원시 출력에 정확한 박스 좌표와 일련번호를 붙인다."""
     by_page = {p["index"]: p for p in pages}
     out_pages, counter = [], 0
@@ -91,7 +89,7 @@ def finalize(raw: dict, pages: list[dict], persona: Persona, mode: str,
     return {
         "persona": persona.model_dump(),
         "mode": mode,
-        "model": model,
+        "engine": engine,
         "context": context,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "overall": {
@@ -226,12 +224,6 @@ SYSTEM_PROMPT = """당신은 발표·브리핑 자료를 특정 청중(페르소
 - overall.first_impression 은 페르소나가 처음 10초 동안 받는 인상, summary 는 종합 평가, strengths 는 잘된 점, top_fixes 는 가장 먼저 고칠 3~5가지입니다."""
 
 
-def _client():
-    import anthropic
-
-    return anthropic.Anthropic()
-
-
 def _page_content(page: dict, doc_path: Path) -> list[dict]:
     lines = [f"=== 페이지 {page['index']} ==="]
     blocks = page.get("blocks") or []
@@ -252,39 +244,11 @@ def _page_content(page: dict, doc_path: Path) -> list[dict]:
     ]
 
 
-def _call(client, content: list[dict], schema: dict, max_tokens: int = 32000) -> dict:
-    import anthropic
-
+def _call(provider, content: list[dict], schema: dict, max_tokens: int = 32000) -> dict:
     try:
-        with client.beta.messages.stream(
-            model=MODEL,
-            max_tokens=max_tokens,
-            system=SYSTEM_PROMPT,
-            thinking={"type": "adaptive"},
-            output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": schema}},
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            messages=[{"role": "user", "content": content}],
-        ) as stream:
-            message = stream.get_final_message()
-    except anthropic.AuthenticationError as exc:
-        raise AnalysisError("API 키가 올바르지 않습니다.") from exc
-    except anthropic.RateLimitError as exc:
-        raise AnalysisError("API 요청 한도를 초과했습니다. 잠시 후 다시 시도하세요.") from exc
-    except anthropic.APIStatusError as exc:
-        raise AnalysisError(f"Claude API 오류 ({exc.status_code}): {exc.message}") from exc
-    except anthropic.APIConnectionError as exc:
-        raise AnalysisError("Claude API 에 연결할 수 없습니다.") from exc
-
-    if message.stop_reason == "refusal":
-        raise AnalysisError("모델이 이 자료의 분석을 거절했습니다.")
-    if message.stop_reason == "max_tokens":
-        raise AnalysisError("응답이 너무 길어 잘렸습니다. WHOWILLSEE_PAGES_PER_CALL 값을 줄여보세요.")
-    text = next((b.text for b in message.content if b.type == "text"), "")
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise AnalysisError("모델 응답을 해석할 수 없습니다.") from exc
+        return provider.complete_json(SYSTEM_PROMPT, content, schema, max_tokens)
+    except providers.ProviderError as exc:
+        raise AnalysisError(str(exc)) from exc
 
 
 def _intro(persona: Persona, context: str, page_nums: list[int], total: int) -> str:
@@ -298,9 +262,8 @@ def _intro(persona: Persona, context: str, page_nums: list[int], total: int) -> 
     return "\n".join(parts)
 
 
-def _analyze_with_claude(pages: list[dict], doc_path: Path, persona: Persona, context: str,
-                         progress: ProgressFn) -> dict:
-    client = _client()
+def _analyze_with_ai(client, pages: list[dict], doc_path: Path, persona: Persona, context: str,
+                     progress: ProgressFn) -> dict:
     batches = [pages[i:i + PAGES_PER_CALL] for i in range(0, len(pages), PAGES_PER_CALL)]
     total_steps = len(batches) + (1 if len(batches) > 1 else 0)
     merged_pages, overalls = [], []

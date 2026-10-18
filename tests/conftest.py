@@ -23,5 +23,7 @@ def isolated_data(tmp_path, monkeypatch):
     from app import storage
 
     monkeypatch.setattr(storage, "DATA_DIR", tmp_path / "data")
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL",
+                "WHOWILLSEE_PROVIDER", "WHOWILLSEE_MODEL", "WHOWILLSEE_DEMO", "WHOWILLSEE_LOCK_SETTINGS"):
+        monkeypatch.delenv(var, raising=False)
     yield

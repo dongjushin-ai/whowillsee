@@ -10,10 +10,20 @@
 <body>
 <header class="topbar">
   <div class="brand">👁️ <b>WhoWillSee</b> <span class="tagline">누가 보느냐에 따라 자료는 다르게 읽힌다</span></div>
-  <span id="mode-badge" class="badge"></span>
+  <nav class="nav" id="nav">
+    <a href="#analyze" data-view="analyze">분석</a>
+    <a href="#dashboard" data-view="dashboard">대시보드</a>
+    <a href="#settings" data-view="settings">AI 연결</a>
+  </nav>
+  <a id="mode-badge" class="badge" href="#settings"></a>
 </header>
 
-<div class="layout">
+<div id="ai-banner" class="ai-banner" hidden>
+  AI가 연결되지 않아 <b>데모 모드</b>(규칙 기반)로 분석합니다. 내 Claude·OpenAI·Gemini·Ollama 등을 연결하면 페르소나가 직접 자료를 읽고 평가합니다.
+  <a href="#settings">AI 연결하기 →</a>
+</div>
+
+<div class="layout" id="view-analyze">
   <aside class="sidebar">
     <section>
       <h2><span class="step">1</span> 누가 보나요? <small>(여러 명 선택 가능)</small></h2>
@@ -73,6 +83,67 @@
       </div>
     </div>
   </main>
+</div>
+
+<div id="view-dashboard" class="page-view" hidden>
+  <div id="dashboard"></div>
+</div>
+
+<div id="view-settings" class="page-view" hidden>
+  <div class="settings">
+    <h1>AI 연결</h1>
+    <p class="muted">WhoWillSee는 특정 AI 계정에 묶여 있지 않습니다. 사용하는 사람이 자기 AI를 연결하세요.
+      입력한 키는 이 서버의 <code>data/settings.json</code>에만 저장되고(깃에 올라가지 않음), 화면에는 일부만 표시됩니다.</p>
+    <div id="settings-locked" class="note warn" hidden>이 서버는 관리자가 AI 설정을 잠가 두었습니다 (WHOWILLSEE_LOCK_SETTINGS).</div>
+    <form id="settings-form">
+      <fieldset class="provider-cards" id="provider-cards"></fieldset>
+
+      <div class="field-group" data-for="openai_compatible">
+        <label>서비스
+          <select name="preset" id="preset-select"></select>
+        </label>
+        <label>API 주소 (Base URL)
+          <input name="base_url" id="base-url" placeholder="https://…/v1">
+        </label>
+      </div>
+
+      <div class="field-group" data-for="anthropic openai_compatible">
+        <label>모델
+          <input name="model" id="model-input" autocomplete="off">
+          <small id="model-hint" class="muted"></small>
+        </label>
+        <label><span>API 키 <a id="key-link" target="_blank" rel="noopener" class="muted"></a></span>
+          <input name="api_key" id="key-input" type="password" autocomplete="off" placeholder="키를 입력하세요">
+          <small id="key-state" class="muted"></small>
+        </label>
+      </div>
+
+      <div class="field-group" data-for="anthropic">
+        <label>분석 깊이 (effort)
+          <select name="effort" id="effort-select">
+            <option value="">모델 기본값</option>
+            <option value="low">low · 빠르고 저렴</option>
+            <option value="medium">medium · 균형 (추천)</option>
+            <option value="high">high · 꼼꼼함</option>
+            <option value="xhigh">xhigh</option>
+            <option value="max">max · 가장 꼼꼼, 느림</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="settings-actions">
+        <button type="button" class="btn" id="test-btn">연결 테스트</button>
+        <button type="submit" class="btn primary">저장</button>
+      </div>
+      <div id="settings-msg" class="note" hidden></div>
+    </form>
+    <details class="help">
+      <summary>환경 변수로 설정하기 (서버 운영자용)</summary>
+      <p>화면에서 저장한 설정이 없으면 환경 변수를 씁니다. <code>ANTHROPIC_API_KEY</code>가 있으면 Claude,
+        <code>OPENAI_API_KEY</code> + <code>OPENAI_BASE_URL</code> + <code>WHOWILLSEE_MODEL</code>이 있으면 OpenAI 호환 API를 씁니다.
+        여러 사람이 쓰는 서버라면 <code>WHOWILLSEE_LOCK_SETTINGS=1</code>로 화면에서 설정을 바꾸지 못하게 잠그세요.</p>
+    </details>
+  </div>
 </div>
 
 <dialog id="persona-dialog">

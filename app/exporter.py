@@ -71,7 +71,7 @@ def annotated_pdf(meta: dict, doc_path: Path, result: dict) -> bytes:
     w.text("WhoWillSee 검토 리포트", size=20, gap=10)
     w.text(f"자료: {meta['filename']}", size=10, color=(0.35, 0.35, 0.35), gap=2)
     w.text(f"페르소나: {persona.get('icon', '')} {persona['name']}", size=10, color=(0.35, 0.35, 0.35), gap=2)
-    mode = "Claude 분석" if result["mode"] == "claude" else "데모 모드(규칙 기반)"
+    mode = result.get("engine") or "데모 모드(규칙 기반)"
     w.text(f"분석: {mode} · {result['created_at']}", size=10, color=(0.35, 0.35, 0.35), gap=14)
     c = overall["counts"]
     w.text(f"전달력 점수 {overall['score']} / 100   ·   치명 {c['critical']} · 주의 {c['warning']} · 제안 {c['suggestion']}",
