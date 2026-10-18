@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import providers
+from . import providers, recording
 from . import script as scripts
 from .personas import Persona
 
@@ -39,22 +39,23 @@ def analyze(doc: dict, doc_path: Path, persona: Persona, context: str = "",
     progress = progress or (lambda done, total: None)
     pages = doc["pages"]
     script = doc.get("script")
+    delivery = recording.delivery_summary(doc.get("recording"))
     try:
         provider = providers.get_provider()
     except providers.ProviderError as exc:
         raise AnalysisError(str(exc)) from exc
     if provider:
-        raw = _analyze_with_ai(provider, pages, doc_path, persona, context, progress, script)
+        raw = _analyze_with_ai(provider, pages, doc_path, persona, context, progress, script, delivery)
         mode, engine = "ai", provider.engine
     else:
-        raw, mode, engine = _analyze_demo(pages, persona, script), "demo", None
+        raw, mode, engine = _analyze_demo(pages, persona, script, doc.get("recording")), "demo", None
         progress(1, 1)
     timing = scripts.timing(script, [p["index"] for p in pages])
-    return finalize(raw, pages, persona, mode, engine, context, timing)
+    return finalize(raw, pages, persona, mode, engine, context, timing, delivery)
 
 
 def finalize(raw: dict, pages: list[dict], persona: Persona, mode: str,
-             engine: str | None, context: str, timing: dict | None = None) -> dict:
+             engine: str | None, context: str, timing: dict | None = None, delivery: dict | None = None) -> dict:
     """모델/휴리스틱의 원시 출력에 정확한 박스 좌표와 일련번호를 붙인다."""
     by_page = {p["index"]: p for p in pages}
     out_pages, counter = [], 0
@@ -107,6 +108,7 @@ def finalize(raw: dict, pages: list[dict], persona: Persona, mode: str,
             "top_fixes": list(overall.get("top_fixes") or []),
             "counts": counts,
             "timing": timing,
+            "delivery": delivery,
         },
         "pages": out_pages,
     }
@@ -272,7 +274,8 @@ def _call(provider, content: list[dict], schema: dict, max_tokens: int = 32000) 
         raise AnalysisError(str(exc)) from exc
 
 
-def _intro(persona: Persona, context: str, page_nums: list[int], total: int, timing: dict | None = None) -> str:
+def _intro(persona: Persona, context: str, page_nums: list[int], total: int, timing: dict | None = None,
+           delivery: dict | None = None) -> str:
     parts = ["## 페르소나", persona.to_prompt()]
     if context.strip():
         parts += ["", "## 자료 사용 상황 (발표자가 입력)", context.strip()]
@@ -280,6 +283,14 @@ def _intro(persona: Persona, context: str, page_nums: list[int], total: int, tim
         target = f", 목표 {timing['target_minutes']}분" if timing.get("target_minutes") else ""
         parts += ["", f"## 발표 시간\n대본 기준 예상 {timing['est_minutes']}분{target}. "
                       "목표를 넘으면 무엇을 줄일지 페르소나 관점에서 지적하세요."]
+    if delivery:
+        fill = ", ".join(f"{k} {v}회" for k, v in (delivery.get("fillers") or {}).items()) or "거의 없음"
+        parts += ["", "## 실제 발표 녹음 지표",
+                  f"- 실제 발표 시간 {delivery['duration_seconds'] / 60:.1f}분, 말 속도 {delivery.get('rate') or '알 수 없음'}자/분"
+                  " (공백 제외, 보통 300~350)",
+                  f"- 말버릇: {fill}", f"- 2.5초 넘는 긴 멈춤 {delivery['long_pauses']}회",
+                  "대본은 실제 녹음을 받아쓴 것입니다. 이 사람이 듣기에 말하기 방식(속도, 말버릇, 멈춤)이 문제라면 "
+                  "가장 관련 있는 페이지에 target 'script' 지적으로 남기세요."]
     if len(page_nums) < total:
         parts += ["", f"## 범위\n전체 {total}페이지 중 {page_nums[0]}~{page_nums[-1]}페이지입니다. "
                       "overall 은 이 범위 기준으로 작성하세요."]
@@ -288,14 +299,14 @@ def _intro(persona: Persona, context: str, page_nums: list[int], total: int, tim
 
 
 def _analyze_with_ai(client, pages: list[dict], doc_path: Path, persona: Persona, context: str,
-                     progress: ProgressFn, script: dict | None = None) -> dict:
+                     progress: ProgressFn, script: dict | None = None, delivery: dict | None = None) -> dict:
     batches = [pages[i:i + PAGES_PER_CALL] for i in range(0, len(pages), PAGES_PER_CALL)]
     timing = scripts.timing(script, [p["index"] for p in pages])
     total_steps = len(batches) + (1 if len(batches) > 1 else 0)
     merged_pages, overalls = [], []
     for done, batch in enumerate(batches):
         progress(done, total_steps)
-        content = [{"type": "text", "text": _intro(persona, context, [p["index"] for p in batch], len(pages), timing)}]
+        content = [{"type": "text", "text": _intro(persona, context, [p["index"] for p in batch], len(pages), timing, delivery)}]
         for page in batch:
             content += _page_content(page, doc_path, scripts.page_text(script, page["index"]))
         result = _call(client, content, RESULT_SCHEMA)
@@ -337,7 +348,7 @@ ACRONYM = re.compile(r"\b[A-Z][A-Za-z0-9/+-]*[A-Z0-9]\b")
 NUMBER = re.compile(r"\d[\d,.]*\s*%?")
 
 
-def _analyze_demo(pages: list[dict], persona: Persona, script: dict | None = None) -> dict:
+def _analyze_demo(pages: list[dict], persona: Persona, script: dict | None = None, rec: dict | None = None) -> dict:
     lay = persona.expertise_level <= 2
     mid = persona.expertise_level <= 3
     elderly = persona.digital_literacy <= 1 or "70" in persona.age_group or "고령" in persona.name
@@ -414,6 +425,11 @@ def _analyze_demo(pages: list[dict], persona: Persona, script: dict | None = Non
             "페르소나에게 꼭 필요한 내용만 남기고 배경 설명은 질의응답이나 자료로 돌리세요.",
             "언제 끝나지…", target="script"))
         penalty += 6
+    for page_no, issue in _demo_delivery_issues(rec, persona):
+        target = next((p for p in out_pages if p["page"] == page_no), None)
+        if target:
+            target["issues"].append(issue)
+            penalty += 4
     score = max(5, 100 - penalty // max(len(pages), 1))
     return {
         "overall": {
@@ -426,6 +442,46 @@ def _analyze_demo(pages: list[dict], persona: Persona, script: dict | None = Non
         },
         "pages": out_pages,
     }
+
+
+def _demo_delivery_issues(rec: dict | None, persona: Persona) -> list[tuple[int, dict]]:
+    """녹음 지표(말 속도·말버릇·긴 멈춤)에 대한 규칙 기반 지적. (페이지, 지적) 목록."""
+    if not rec:
+        return []
+    m = rec["metrics"]
+    pages = [p for p in m["per_page"] if p["seconds"] > 0] or m["per_page"]
+    out = []
+    fast_limit = 340 if persona.expertise_level <= 2 or persona.digital_literacy <= 1 else 400
+    timed = [p for p in pages if p.get("rate")]
+    if m.get("rate") and m["rate"] > fast_limit and timed:
+        fastest = max(timed, key=lambda p: p["rate"])
+        out.append((fastest["page"], _demo_issue(
+            [], "warning", "가독성", "말이 너무 빠릅니다",
+            f"평균 {m['rate']}자/분(이 페이지 {fastest['rate']}자/분)으로, {persona.name}이(가) 따라가기 어렵습니다 "
+            "(보통 300~350자/분).", "핵심 문장 앞뒤로 한 박자 쉬고, 숫자는 천천히 또박또박 말하세요.",
+            "너무 빨라서 놓쳤어.", target="script")))
+    elif m.get("rate") and m["rate"] < 220 and timed:
+        out.append((timed[0]["page"], _demo_issue(
+            [], "suggestion", "톤·표현", "말이 다소 느립니다",
+            f"평균 {m['rate']}자/분으로 느린 편이라 집중이 흐트러질 수 있습니다.",
+            "준비한 내용을 줄이고 말의 속도를 조금 올려 보세요.", "언제 본론이 나오지?", target="script")))
+    per_min = m.get("fillers_per_minute") or 0
+    if per_min >= 3:
+        worst = max(pages, key=lambda p: p["fillers"])
+        top = ", ".join(f"'{k}' {v}회" for k, v in list(m["fillers"].items())[:3])
+        out.append((worst["page"], _demo_issue(
+            [], "warning" if per_min >= 6 else "suggestion", "톤·표현", "말버릇이 자주 나옵니다",
+            f"분당 {per_min}회({top}). 말버릇이 잦으면 준비가 덜 된 인상을 주고 신뢰가 떨어집니다.",
+            "말버릇이 나올 자리에서는 잠깐 멈추세요. 침묵이 '음…'보다 훨씬 자신감 있게 들립니다.",
+            "자꾸 '이제'라고 하네…", target="script")))
+    pauses = m.get("long_pauses") or []
+    if len(pauses) >= 3:
+        out.append((pages[0]["page"], _demo_issue(
+            [], "suggestion", "논리·구성", "긴 멈춤이 여러 번 있습니다",
+            f"2.5초가 넘는 멈춤이 {len(pauses)}번 있습니다 (예: {pauses[0]['at']:.0f}초 지점 {pauses[0]['seconds']}초).",
+            "페이지를 넘길 때 할 연결 문장을 미리 정해 두세요 (예: '그럼 비용은 얼마일까요?').",
+            "끝났나?", target="script")))
+    return out
 
 
 def _demo_script_issues(text: str, persona: Persona, lay: bool, mid: bool) -> list[dict]:

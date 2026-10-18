@@ -28,11 +28,18 @@ def _chars(text: str) -> int:
 def timing(script: dict | None, page_indexes: list[int]) -> dict | None:
     if not script or not any(page_text(script, i) for i in page_indexes):
         return None
-    per_page = [{"page": i, "chars": _chars(page_text(script, i)),
-                 "minutes": round(_chars(page_text(script, i)) / CHARS_PER_MINUTE, 1)} for i in page_indexes]
-    est = round(sum(p["chars"] for p in per_page) / CHARS_PER_MINUTE, 1)
+    actual = script.get("actual_seconds") or {}  # 녹음으로 잰 실제 시간이 있으면 그것을 쓴다
+    per_page = []
+    for i in page_indexes:
+        chars = _chars(page_text(script, i))
+        minutes = actual[str(i)] / 60 if str(i) in actual else chars / CHARS_PER_MINUTE
+        per_page.append({"page": i, "chars": chars, "minutes": round(minutes, 1)})
+    if actual:
+        est = round(sum(actual.values()) / 60, 1)
+    else:
+        est = round(sum(p["chars"] for p in per_page) / CHARS_PER_MINUTE, 1)
     target = script.get("target_minutes")
-    return {"est_minutes": est, "target_minutes": target, "per_page": per_page,
+    return {"est_minutes": est, "target_minutes": target, "per_page": per_page, "measured": bool(actual),
             "over": bool(target) and est > target * 1.1}
 
 

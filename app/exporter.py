@@ -80,7 +80,14 @@ def annotated_pdf(meta: dict, doc_path: Path, result: dict) -> bytes:
     timing = overall.get("timing")
     if timing:
         target = f" / 목표 {timing['target_minutes']:g}분" if timing.get("target_minutes") else ""
-        w.text(f"예상 발표 시간 {timing['est_minutes']:g}분{target} (대본 기준)", size=11, gap=10)
+        kind = "실제" if timing.get("measured") else "예상"
+        basis = "녹음 기준" if timing.get("measured") else "대본 기준"
+        w.text(f"{kind} 발표 시간 {timing['est_minutes']:g}분{target} ({basis})", size=11, gap=4 if overall.get("delivery") else 10)
+    delivery = overall.get("delivery")
+    if delivery:
+        rate = f"말 속도 {delivery['rate']}자/분 · " if delivery.get("rate") else ""
+        w.text(f"{rate}말버릇 {delivery['filler_total']}회 · 긴 멈춤 {delivery['long_pauses']}회 (녹음 '{delivery.get('filename', '')}')",
+               size=10, color=(0.35, 0.35, 0.35), gap=10)
     if result.get("context"):
         w.text("자료 사용 상황", size=12, gap=2)
         w.text(result["context"], gap=10)

@@ -17,8 +17,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (analyzer, audiences, compare, converter, exporter, persona_gen, personas, providers, report_html,
-               script, stats, storage)
+from . import (analyzer, audiences, compare, converter, exporter, persona_gen, personas, providers, recording,
+               report_html, script, speech, stats, storage)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -122,6 +122,28 @@ def test_settings(update: providers.SettingsUpdate):
     try:
         return providers.test_connection(providers.merge_for_test(update))
     except providers.ProviderError as exc:
+        return {"ok": False, "message": str(exc), "latency_ms": 0}
+
+
+@app.get("/api/speech")
+def get_speech():
+    return speech.describe(speech.load())
+
+
+@app.put("/api/speech")
+def put_speech(update: speech.SpeechUpdate):
+    if providers.settings_locked():
+        raise HTTPException(403, "이 서버는 AI 설정이 잠겨 있습니다 (WHOWILLSEE_LOCK_SETTINGS).")
+    return speech.describe(speech.save(update))
+
+
+@app.post("/api/speech/test")
+def test_speech(update: speech.SpeechUpdate):
+    if providers.settings_locked():
+        raise HTTPException(403, "이 서버는 AI 설정이 잠겨 있습니다 (WHOWILLSEE_LOCK_SETTINGS).")
+    try:
+        return speech.test_connection(speech.merge_for_test(update))
+    except speech.SpeechError as exc:
         return {"ok": False, "message": str(exc), "latency_ms": 0}
 
 
@@ -306,7 +328,11 @@ def save_script(doc_id: str, data: ScriptIn):
     if any(len(v) > 20000 for v in data.pages.values()):
         raise HTTPException(422, "한 페이지 대본은 20,000자까지입니다.")
     pages = {k: v.strip() for k, v in data.pages.items() if v.strip()}
+    previous = meta.get("script") or {}
     meta["script"] = {"target_minutes": data.target_minutes, "pages": pages} if pages or data.target_minutes else None
+    if meta["script"] and previous.get("actual_seconds"):  # 녹음으로 잰 실제 시간은 유지한다
+        meta["script"]["actual_seconds"] = previous["actual_seconds"]
+        meta["script"]["source"] = previous.get("source")
     storage.write_json(storage.doc_dir(doc_id) / "meta.json", meta)
     return {"script": meta["script"],
             "timing": script.timing(meta["script"], [p["index"] for p in meta["pages"]])}
@@ -319,6 +345,69 @@ def page_image(doc_id: str, index: int):
     if not page:
         raise HTTPException(404, "페이지가 없습니다.")
     return FileResponse(storage.doc_dir(doc_id) / page["image"], media_type="image/png")
+
+
+# ------------------------------------------------------------------ 발표 녹음
+
+@app.post("/api/documents/{doc_id}/recording", status_code=202)
+def upload_recording(doc_id: str, file: UploadFile = File(...)):
+    meta = _doc_meta(doc_id)
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in speech.AUDIO_EXTS:
+        raise HTTPException(400, f"지원하지 않는 녹음 형식입니다: {ext or '(확장자 없음)'}")
+    settings = speech.load()
+    issues = speech.problems(settings)
+    if issues:
+        raise HTTPException(409, " ".join(issues))
+    data = file.file.read(speech.MAX_AUDIO_BYTES + 1)
+    if len(data) > speech.MAX_AUDIO_BYTES:
+        raise HTTPException(413, "녹음 파일이 너무 큽니다 (최대 25MB). 낮은 음질로 저장하거나 나눠서 올려주세요.")
+    job_id = storage.new_id()
+    job = {"id": job_id, "doc_id": doc_id, "kind": "recording", "status": "running", "created_at": time.time(),
+           "items": {"recording": {"persona_id": "recording", "name": "🎙 녹음 받아쓰기", "status": "running",
+                                   "done": 0, "total": 2, "error": None}}}
+    with _jobs_lock:
+        _jobs[job_id] = job
+        _save_job(job)
+    _executor.submit(_run_recording, job, meta, settings, Path(file.filename).name, data)
+    return _job_view(job)
+
+
+def _run_recording(job: dict, meta: dict, settings, filename: str, data: bytes) -> None:
+    item = job["items"]["recording"]
+    try:
+        transcript = speech.transcribe(settings, filename, data)
+        item["done"] = 1
+        metrics = recording.analyze(meta, transcript)
+        meta = storage.read_json(storage.doc_dir(meta["id"]) / "meta.json")  # 그사이 바뀐 내용 반영
+        meta["recording"] = {"filename": filename, "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                             "transcript": transcript, "metrics": metrics}
+        previous = meta.get("script") or {}
+        meta["script"] = {"target_minutes": previous.get("target_minutes"), "pages": metrics["page_texts"],
+                          "source": "recording",
+                          "actual_seconds": {str(p["page"]): p["seconds"] for p in metrics["per_page"]}
+                          if metrics["timed"] else {}}
+        storage.write_json(storage.doc_dir(meta["id"]) / "meta.json", meta)
+        item["done"], item["status"] = 2, "done"
+    except speech.SpeechError as exc:
+        item["status"], item["error"] = "error", str(exc)
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        item["status"], item["error"] = "error", f"예상치 못한 오류: {exc}"
+    with _jobs_lock:
+        job["status"] = "done" if item["status"] == "done" else "error"
+        _save_job(job)
+
+
+@app.delete("/api/documents/{doc_id}/recording", status_code=204)
+def delete_recording(doc_id: str):
+    meta = _doc_meta(doc_id)
+    meta.pop("recording", None)
+    if meta.get("script"):
+        meta["script"].pop("actual_seconds", None)
+        meta["script"].pop("source", None)
+    storage.write_json(storage.doc_dir(doc_id) / "meta.json", meta)
+    return Response(status_code=204)
 
 
 # ------------------------------------------------------------------ 분석

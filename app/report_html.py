@@ -87,7 +87,14 @@ def render(meta: dict, doc_path: Path, result: dict) -> str:
     timing = o.get("timing")
     if timing:
         target = f" / 목표 {timing['target_minutes']:g}분" if timing.get("target_minutes") else ""
-        parts.append(f"<h3>발표 시간</h3><div>예상 {timing['est_minutes']:g}분{target} (대본 기준)</div>")
+        basis = "실제 {0:g}분{1} (녹음 기준)" if timing.get("measured") else "예상 {0:g}분{1} (대본 기준)"
+        parts.append(f"<h3>발표 시간</h3><div>{basis.format(timing['est_minutes'], target)}</div>")
+    delivery = o.get("delivery")
+    if delivery:
+        rate = f"말 속도 {delivery['rate']}자/분 · " if delivery.get("rate") else ""
+        top = ", ".join(f"{_e(k)} {v}" for k, v in list((delivery.get("fillers") or {}).items())[:3])
+        parts.append(f"<h3>말하기</h3><div>{rate}말버릇 {delivery['filler_total']}회"
+                     f"{f' ({top})' if top else ''} · 긴 멈춤 {delivery['long_pauses']}회</div>")
     for title, items in (("우선 고칠 것", o.get("top_fixes")), ("잘된 점", o.get("strengths"))):
         if items:
             parts.append(f"<h3>{title}</h3><ol>{''.join(f'<li>{_e(i)}</li>' for i in items)}</ol>")

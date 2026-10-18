@@ -108,7 +108,10 @@ function route() {
   for (const v of VIEWS) $(`#view-${v}`).hidden = v !== view;
   document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === view));
   $("#ai-banner").hidden = state.status?.mode === "ai" || view === "settings";
-  if (view === "settings") loadSettings();
+  if (view === "settings") {
+    loadSettings();
+    loadSpeech();
+  }
   if (view === "dashboard") loadDashboard();
 }
 
@@ -602,7 +605,9 @@ function pollJob(jobId, docId, audienceId = null) {
       await loadDocs();
       if (job.status === "done") {
         setProgress([]);
-        toast("분석이 끝났습니다.");
+        toast(job.kind === "recording"
+          ? "받아쓰기가 끝났습니다. '🎤 발표 대본'에서 확인하고, '분석 시작'을 누르면 실제 발표 기준으로 평가합니다."
+          : "분석이 끝났습니다.", job.kind === "recording" ? 7000 : 3500);
       }
     }
   };
@@ -619,6 +624,107 @@ function setProgress(items) {
       i.status === "error" ? el("div", { class: "err" }, i.error) : el("div", { class: "bar" }, el("i", { style: `width:${Math.max(pct, 4)}%` })),
     );
   }));
+}
+
+// ------------------------------------------------------------------ 음성 인식 설정
+
+async function loadSpeech() {
+  const s = await api("/api/speech");
+  state.speech = s;
+  fill($("#speech-preset"), ...s.presets.map((p) => el("option", { value: p.id, selected: p.id === s.preset }, p.label)));
+  $("#speech-enabled").checked = s.enabled;
+  $("#speech-base").value = s.base_url || "";
+  $("#speech-model").value = s.model || "";
+  $("#speech-lang").value = s.language || "ko";
+  $("#speech-key").value = "";
+  $("#speech-msg").hidden = true;
+  for (const x of $("#speech-form").elements) x.disabled = s.locked;
+  syncSpeechForm();
+}
+
+function syncSpeechForm() {
+  const s = state.speech;
+  if (!s) return;
+  const preset = s.presets.find((p) => p.id === $("#speech-preset").value) || s.presets.at(-1);
+  $("#speech-fields").hidden = !$("#speech-enabled").checked;
+  $("#speech-base").placeholder = preset.base_url || "https://…/v1";
+  $("#speech-model").placeholder = preset.model_hint;
+  const link = $("#speech-key-link");
+  link.textContent = preset.key_url ? "(키 발급 ↗)" : "";
+  link.href = preset.key_url || "#";
+  const saved = s.keys[preset.id];
+  const st = $("#speech-key-state");
+  if (preset.id === s.preset && s.key_source === "shared") st.textContent = `분석용 AI 연결의 OpenAI 키를 함께 씁니다 (${s.key_hint}).`;
+  else if (saved) st.textContent = `저장된 키 사용 중: ${saved} · 새로 입력하면 교체됩니다.`;
+  else st.textContent = preset.needs_key ? (preset.id === "openai" ? "비워두면 'AI 연결'에 저장한 OpenAI 키를 함께 씁니다." : "") : "보통 키가 필요 없습니다.";
+}
+
+function speechFormValue() {
+  const key = $("#speech-key").value.trim();
+  return { enabled: $("#speech-enabled").checked, preset: $("#speech-preset").value, base_url: $("#speech-base").value.trim(),
+    model: $("#speech-model").value.trim(), language: $("#speech-lang").value.trim() || "ko", api_key: key || null };
+}
+
+function speechMsg(kind, text) {
+  const m = $("#speech-msg");
+  m.className = `note ${kind}`;
+  m.textContent = text;
+  m.hidden = false;
+}
+
+async function testSpeech() {
+  speechMsg("", "연결 테스트 중… (1초짜리 무음 파일을 보내 확인합니다)");
+  try {
+    const r = await api("/api/speech/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(speechFormValue()) });
+    speechMsg(r.ok ? "ok" : "err", r.ok ? `✓ ${r.message} · ${(r.latency_ms / 1000).toFixed(1)}초` : `✕ ${r.message}`);
+  } catch (err) {
+    speechMsg("err", `✕ ${err.message}`);
+  }
+}
+
+async function saveSpeech(e) {
+  e.preventDefault();
+  try {
+    const r = await api("/api/speech", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(speechFormValue()) });
+    await loadSpeech();
+    speechMsg(!r.enabled || r.ready ? "ok" : "err", !r.enabled ? "저장했습니다. 음성 인식을 쓰지 않습니다."
+      : r.ready ? "저장했습니다. 이제 발표 녹음을 올릴 수 있습니다." : `저장했지만 아직 쓸 수 없습니다: ${r.problems.join(" ")}`);
+  } catch (err) {
+    speechMsg("err", `저장 실패: ${err.message}`);
+  }
+}
+
+// ------------------------------------------------------------------ 발표 녹음
+
+async function uploadRecording(file) {
+  if (!state.doc) return;
+  const fd = new FormData();
+  fd.append("file", file);
+  try {
+    const job = await api(`/api/documents/${state.doc.id}/recording`, { method: "POST", body: fd });
+    pollJob(job.id, state.doc.id);
+  } catch (err) {
+    toast(err.message.includes("음성 인식") ? `${err.message} → 상단 'AI 연결' 아래 '음성 인식'을 설정하세요.` : `녹음 올리기 실패: ${err.message}`, 7000);
+  }
+}
+
+async function deleteRecording() {
+  if (!confirm("녹음 분석 결과를 지울까요? (받아쓴 대본은 남습니다)")) return;
+  await api(`/api/documents/${state.doc.id}/recording`, { method: "DELETE" });
+  state.doc = await api(`/api/documents/${state.doc.id}`);
+  $("#script-dialog").close();
+  toast("녹음 분석을 지웠습니다. 발표 시간은 다시 대본 글자 수로 추정합니다.");
+}
+
+function deliveryLine(d) {
+  if (!d) return null;
+  const fillers = Object.entries(d.fillers || {}).slice(0, 3).map(([k, v]) => `${k} ${v}`).join(", ");
+  return el("div", { class: "delivery" },
+    el("span", {}, "🎙 실제 발표 ", el("b", {}, `${(d.duration_seconds / 60).toFixed(1)}분`)),
+    d.rate ? el("span", {}, "말 속도 ", el("b", {}, `${d.rate}자/분`), el("span", { class: "muted" }, " (보통 300~350)")) : null,
+    el("span", {}, "말버릇 ", el("b", {}, `${d.filler_total}회`), fillers ? el("span", { class: "muted" }, ` (${fillers})`) : null),
+    el("span", {}, "긴 멈춤 ", el("b", {}, `${d.long_pauses}회`)),
+    d.timed ? null : el("span", { class: "muted" }, "· 이 음성 인식 서버는 구간 시간을 주지 않아 페이지별 시간은 추정치입니다"));
 }
 
 async function resumeJob() {
@@ -646,13 +752,23 @@ function openScriptDialog() {
   if (!state.doc) return;
   const sc = state.doc.script || { target_minutes: null, pages: {} };
   const form = $("#script-form");
+  const rec = state.doc.recording;
+  const src = $("#script-source");
+  src.hidden = !rec;
+  if (rec) {
+    fill(src, el("span", {}, `🎙 녹음 '${rec.filename}'(${(rec.metrics.duration_seconds / 60).toFixed(1)}분)에서 받아쓴 대본입니다. `,
+      rec.metrics.align_method === "ai" ? "페이지 나누기는 AI가 했습니다." : "페이지 나누기는 자동 추정이니 경계를 확인하세요."),
+    el("button", { type: "button", class: "btn small", onclick: deleteRecording }, "녹음 분석 지우기"));
+  }
   form.elements.target_minutes.value = sc.target_minutes ?? "";
   fill($("#script-pages"), ...state.doc.pages.map((pg) => {
     const ta = el("textarea", { "data-page": pg.index, placeholder: "이 페이지에서 말할 내용" });
     ta.value = sc.pages?.[String(pg.index)] || "";
     const est = el("span", {});
+    const actual = sc.actual_seconds?.[String(pg.index)];
     const sync = () => {
-      est.textContent = ta.value.trim() ? `약 ${speakMinutes(ta.value).toFixed(1)}분` : "";
+      est.textContent = actual !== undefined ? `실제 ${(actual / 60).toFixed(1)}분`
+        : ta.value.trim() ? `약 ${speakMinutes(ta.value).toFixed(1)}분` : "";
       syncScriptEstimate();
     };
     ta.addEventListener("input", sync);
@@ -666,11 +782,14 @@ function openScriptDialog() {
 
 function syncScriptEstimate() {
   const texts = [...document.querySelectorAll("#script-pages textarea")].map((t) => t.value);
-  const total = texts.reduce((a, t) => a + speakMinutes(t), 0);
+  const actual = state.doc?.script?.actual_seconds;
+  const total = actual && Object.keys(actual).length
+    ? Object.values(actual).reduce((a, v) => a + v, 0) / 60
+    : texts.reduce((a, t) => a + speakMinutes(t), 0);
   const target = Number($("#script-form").elements.target_minutes.value) || null;
   const over = target && total > target * 1.1;
   const out = $("#script-estimate");
-  out.textContent = total ? `예상 발표 시간 ${total.toFixed(1)}분${target ? ` / 목표 ${target}분` : ""}${over ? " · 목표 초과" : ""}` : "";
+  out.textContent = total ? `${actual && Object.keys(actual).length ? "실제" : "예상"} 발표 시간 ${total.toFixed(1)}분${target ? ` / 목표 ${target}분` : ""}${over ? " · 목표 초과" : ""}` : "";
   out.style.color = over ? "var(--critical)" : "";
 }
 
@@ -763,8 +882,10 @@ function renderOverall() {
           el("span", { class: "share", title: `비중 ${m.share}%` }, el("i", { style: `width:${m.share}%` })),
           el("b", {}, m.score))))] : null,
       o.timing ? el("p", { class: "timing" + (o.timing.over ? " over" : "") },
-        `🎤 예상 발표 시간 ${o.timing.est_minutes}분`, o.timing.target_minutes ? ` / 목표 ${o.timing.target_minutes}분` : "",
-        o.timing.over ? " · 목표 초과" : "", el("span", { class: "muted" }, " (대본 기준)")) : null,
+        `🎤 ${o.timing.measured ? "실제" : "예상"} 발표 시간 ${o.timing.est_minutes}분`,
+        o.timing.target_minutes ? ` / 목표 ${o.timing.target_minutes}분` : "", o.timing.over ? " · 목표 초과" : "",
+        el("span", { class: "muted" }, o.timing.measured ? " (녹음 기준)" : " (대본 기준)")) : null,
+      deliveryLine(o.delivery),
       el("p", { class: "muted" }, `${r.engine ? `분석: ${r.engine}` : "데모 모드(규칙 기반)"} · ${r.created_at}`),
       el("div", { class: "cols" },
         o.top_fixes?.length ? el("div", {}, el("h3", {}, "우선 고칠 것"), el("ol", {}, ...o.top_fixes.map((t) => el("li", {}, t)))) : null,
@@ -929,6 +1050,13 @@ function bind() {
   $("#autofill-btn").addEventListener("click", autofillPersona);
   $("#audience-form").addEventListener("submit", saveAudience);
   $("#script-btn").addEventListener("click", openScriptDialog);
+  $("#recording-input").addEventListener("change", (e) => {
+    if (e.target.files[0]) uploadRecording(e.target.files[0]);
+    e.target.value = "";
+  });
+  $("#speech-form").addEventListener("change", syncSpeechForm);
+  $("#speech-form").addEventListener("submit", saveSpeech);
+  $("#speech-test-btn").addEventListener("click", testSpeech);
   $("#script-form").addEventListener("submit", saveScript);
   $("#script-form").addEventListener("input", syncScriptEstimate);
   $("#script-cancel").addEventListener("click", () => $("#script-dialog").close());

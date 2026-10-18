@@ -402,3 +402,10 @@ dialog.wide { width: min(900px, 96vw); }
 .score-ring .hole { background: var(--panel); border-radius: 50%; width: 84px; height: 84px; display: grid; place-items: center; }
 .theme-btn { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 99px; padding: 4px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
 .top-right { display: flex; align-items: center; gap: 8px; }
+
+/* ---------- 음성 인식 · 말하기 지표 ---------- */
+.settings-sub { font-size: 17px; margin: 28px 0 4px; padding-top: 18px; border-top: 1px solid var(--line); }
+.switch { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; margin: 8px 0 12px; cursor: pointer; }
+.delivery { font-size: 13px; margin: -4px 0 10px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.delivery b { font-variant-numeric: tabular-nums; }
+#script-source { margin: 0 0 12px; display: flex; justify-content: space-between; gap: 10px; align-items: center; }
