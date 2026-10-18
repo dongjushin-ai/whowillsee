@@ -1,5 +1,7 @@
 # 👁️ WhoWillSee
 
+[English](README.en.md) · 한국어
+
 **누가 보느냐에 따라 자료는 다르게 읽힙니다.**
 
 발표 자료, 브리핑, PPT, PDF, HTML, 이미지를 올리고 청중(페르소나)을 고르면,
@@ -13,6 +15,8 @@
 - **수정본 비교:** 고친 자료를 올리면 이전 버전 대비 점수 변화와 **해결 / 남음 / 새로 생김** 지적을 보여줍니다.
 - **대시보드:** 전체 분석 현황, 청중별 평균 전달력, 자주 나온 문제 유형, 자료×청중 점수표, 수정본 개선 추이.
 - **발표 녹음 분석:** 리허설 녹음을 올리면 받아써서 페이지별 **실제 대본**과 **실제 발표 시간**을 만들고, 말 속도·말버릇("음", "이제")·긴 멈춤을 잽니다. 음성 인식도 각자 연결합니다 (OpenAI Whisper, Groq, 내 컴퓨터 Whisper 서버 등).
+- **발표 영상 분석:** 리허설 영상을 올리면 정면을 보는 비율(시선 대용 지표)·화면 안 비율·가장 길게 외면한 구간·조명·거리를 재고, 대표 장면을 보며 청중 관점에서 시선·표정·자세·손동작을 평가합니다. 영상 속 음성은 발표 녹음 분석으로 이어집니다.
+- **영어 UI:** 상단에서 한국어/English를 고를 수 있습니다. 화면, 기본 페르소나·청중 그룹, 데모 규칙 문구, 리포트, AI 분석 결과가 모두 고른 언어로 나옵니다.
 - **다크 모드:** 시스템 설정을 따르고, 상단 버튼으로 자동/라이트/다크를 고를 수 있습니다.
 - **내보내기:** 주석 PDF(빨간 박스, 번호, PDF 메모 주석, 페이지별 메모), 앱 없이 브라우저로 여는 **공유용 HTML 리포트**(이미지 내장 단일 파일), JSON.
 - **내 AI 연결:** 특정 AI 계정에 묶여 있지 않습니다. 사용하는 사람이 **Claude, OpenAI, Gemini, OpenRouter, Ollama·LM Studio(내 컴퓨터)** 등 자기 AI를 화면에서 연결합니다. AI 없이도 규칙 기반 데모 모드로 동작합니다.
@@ -31,12 +35,14 @@ uvicorn app.main:app --port 8000
 
 브라우저에서 http://localhost:8000 을 열고, 상단 **AI 연결** 메뉴에서 내 AI를 연결하세요 (연결하지 않으면 데모 모드).
 
+영상 분석은 `requirements.txt`의 `opencv-python-headless`(4.x)를 쓰고, 영상 속 음성을 뽑으려면 `ffmpeg`가 필요합니다 (`sudo apt install ffmpeg` / `brew install ffmpeg`).
+
 PPT·DOCX 분석에는 LibreOffice가 필요합니다: `sudo apt install libreoffice-impress` / `brew install --cask libreoffice`
 (없어도 PDF·HTML·이미지는 분석할 수 있고, PPT는 PDF로 저장해 올리면 됩니다.)
 
 ### Docker로 실행
 
-LibreOffice·Chromium·한글 글꼴이 모두 들어 있는 이미지입니다.
+LibreOffice·Chromium·ffmpeg·한글 글꼴이 모두 들어 있는 이미지입니다.
 
 ```bash
 docker build -t whowillsee .
@@ -86,8 +92,9 @@ docker run -p 8000:8000 -v whowillsee-data:/data whowillsee
 4. **어떤 상황인가요?** (선택) "구청 주민설명회 10분 발표"처럼 사용 맥락을 적으면 분석에 반영됩니다.
 5. **분석 시작:** 박스에 마우스를 올리면 메모가, 메모에 올리면 박스가 강조됩니다. 심각도(치명/주의/제안) 필터와 청중 탭을 쓸 수 있습니다.
 6. **고치고 다시 확인:** 결과 화면의 **⬆ 수정본 올리기**로 고친 파일을 올리고 분석하면 이전 버전과 비교 패널이 나타납니다. 이전 버전과 같은 청중이 자동으로 선택됩니다.
-7. **공유:** **⬇ 공유용 HTML**은 이미지까지 들어간 파일 하나라서 메일·메신저로 보내면 받는 사람이 앱 없이 바로 열어볼 수 있습니다.
-8. **대시보드:** 전체 현황과 개선 추이를 봅니다. 점수표 칸을 누르면 해당 결과로 이동합니다.
+7. (선택) **🎥 영상 올리기**로 리허설 영상을 올리면 결과 화면에 **🎥 발표 모습** 패널(정면/옆·아래/화면 밖 타임라인, 장면별 피드백)이 생깁니다. 음성 인식이 켜져 있으면 영상 속 말도 받아써서 대본과 실제 시간을 채웁니다.
+8. **공유:** **⬇ 공유용 HTML**은 이미지까지 들어간 파일 하나라서 메일·메신저로 보내면 받는 사람이 앱 없이 바로 열어볼 수 있습니다.
+9. **대시보드:** 전체 현황과 개선 추이를 봅니다. 점수표 칸을 누르면 해당 결과로 이동합니다.
 
 샘플 자료(일부러 문제를 넣은 브리핑 PDF/PPTX/HTML과 그 수정본 PDF)는 `python samples/make_samples.py`로 만들 수 있습니다.
 
@@ -141,8 +148,12 @@ app/
   stats.py        대시보드 집계
   exporter.py     주석 PDF 내보내기
   report_html.py  공유용 단일 HTML 리포트
+  video.py        발표 영상: 장면 추출 · 정면/옆얼굴 검출 · 발표 모습 지표 · 음성 추출
+  messages.py     서버가 만드는 문장의 한국어/영어 카탈로그 (데모 규칙, 리포트, 청중 그룹 요약)
   storage.py      data/ 폴더 저장소
   static/         웹 UI (바닐라 JS, 빌드 과정 없음)
+    i18n.js       화면 번역 (한국어 문구를 키로 쓰는 사전 + 자동 번역)
+    i18n/en.json  영어 사전
 samples/          샘플 자료 생성 스크립트
 tests/            pytest
 docs/PLAN.md      설계 문서와 단계별 체크리스트
@@ -164,9 +175,11 @@ docs/PLAN.md      설계 문서와 단계별 체크리스트
 | POST | `/api/documents` | 업로드 (`file` 또는 `url`, 수정본이면 `parent_id`) → 변환 |
 | GET / DELETE | `/api/documents/{id}` | 문서 메타 조회 / 삭제 |
 | GET | `/api/documents/{id}/pages/{n}.png` | 페이지 이미지 |
+| POST / DELETE | `/api/documents/{id}/video` | 발표 영상 올리기(분석 작업 시작) / 영상 분석 지우기 |
+| GET | `/api/documents/{id}/video/{frame}.jpg` | 영상 대표 장면 |
 | POST / DELETE | `/api/documents/{id}/recording` | 발표 녹음 올리기(받아쓰기 작업 시작) / 녹음 분석 지우기 |
 | PUT | `/api/documents/{id}/script` | 발표 대본 저장 (`{"target_minutes": 10, "pages": {"1": "…"}}`) |
-| POST | `/api/documents/{id}/analyze` | `{"persona_ids": [...], "audience_id": "...", "context": "..."}` → 작업 ID |
+| POST | `/api/documents/{id}/analyze` | `{"persona_ids": [...], "audience_id": "...", "context": "...", "lang": "ko"\|"en"}` → 작업 ID |
 | GET | `/api/jobs/{job_id}` | 진행 상태 |
 | GET | `/api/documents/{id}/results[/{persona_id}]` | 결과 목록 / 상세 |
 | GET | `/api/documents/{id}/compare/{persona_id}` | 이전 버전과 비교 |
@@ -174,13 +187,15 @@ docs/PLAN.md      설계 문서와 단계별 체크리스트
 | GET | `…/results/{persona_id}/export.pdf` · `.html` · `.json` | 내보내기 (청중 그룹은 `…/audiences/{audience_id}/export.*`) |
 | GET | `/api/stats` | 대시보드 집계 |
 
+목록·종합 결과·내보내기 API는 `?lang=en` 을 받으면 기본 프리셋·요약·리포트 문구를 영어로 돌려줍니다.
+
 ## 테스트
 
 ```bash
 python -m pytest -q
 ```
 
-변환기(PDF·이미지·PPTX·HTML), 페르소나·자동 생성, 청중 그룹 집계, 발표 대본·예상 시간, 녹음 받아쓰기(모킹)·페이지 정렬·말하기 지표, HTML 리포트(이미지 내장·HTML 이스케이프), 작업 기록 복구, AI 연결(Claude 호출 모킹, OpenAI 호환 서버 모킹, 키 마스킹·서비스별 격리·설정 잠금), 분석 엔진, 수정본 비교, 대시보드 집계, API 전체 흐름을 검사합니다. GitHub Actions(`.github/workflows/test.yml`)에서도 같은 테스트가 돕니다.
+변환기(PDF·이미지·PPTX·HTML), 페르소나·자동 생성, 청중 그룹 집계, 발표 대본·예상 시간, 녹음 받아쓰기(모킹)·페이지 정렬·말하기 지표, 영상 지표·피드백(얼굴 검출 모킹, 실제 영상·음성 추출), 영어 출력·번역 사전 점검, HTML 리포트(이미지 내장·HTML 이스케이프), 작업 기록 복구, AI 연결(Claude 호출 모킹, OpenAI 호환 서버 모킹, 키 마스킹·서비스별 격리·설정 잠금), 분석 엔진, 수정본 비교, 대시보드 집계, API 전체 흐름을 검사합니다. GitHub Actions(`.github/workflows/test.yml`)에서도 같은 테스트가 돕니다.
 
 ## 알아둘 점
 
@@ -190,4 +205,6 @@ python -m pytest -q
 - 분석 작업 상태는 `data/jobs/`에 남습니다. 분석 도중 서버가 다시 시작되면 그 작업은 '중단됨'으로 표시되니 다시 분석하세요. 브라우저를 새로고침해도 진행 중이던 분석을 이어서 보여줍니다.
 - 예상 발표 시간은 공백을 뺀 글자 수 ÷ 분당 330자로 계산한 대략치입니다. 녹음을 올리면 실제 시간으로 바뀝니다.
 - 녹음을 올리면 녹음 파일이 연결한 음성 인식 서비스로 전송됩니다. 받아쓴 글만 저장하고 녹음 파일 자체는 서버에 남기지 않습니다.
+- 영상의 "정면을 본 비율"은 정면 얼굴 검출기가 얼굴을 찾은 장면의 비율로, 시선 추적이 아닌 **대략적인 추정**입니다. 안경·조명·카메라 각도에 따라 달라질 수 있습니다. 원본 영상은 분석 뒤 지우고 대표 장면 몇 장만 남깁니다.
+- 화면 문구를 추가할 때는 `app/static/i18n/en.json` 에 영어도 넣어주세요. `index.html` 에 번역이 빠진 한국어가 있으면 테스트가 실패합니다. 서버가 만드는 문장은 `app/messages.py` 에 두 언어로 넣습니다.
 - 청중 그룹의 "같은 문제" 묶기와 수정본 비교의 "같은 지적" 판단은 위치·유형·제목 유사도로 추정합니다.
