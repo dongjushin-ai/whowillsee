@@ -120,10 +120,10 @@ FastAPI 서버 (app/main.py)
 - [x] 테스트
 
 ### Step 13. 깃허브 공개 준비
-- [ ] `.env.example`, GitHub Actions 테스트 워크플로
-- [ ] Dockerfile (LibreOffice·Chromium 포함)
-- [ ] README 갱신 (AI 연결 방법, 대시보드, 비교)
-- [ ] 전체 테스트·브라우저 확인·푸시
+- [x] `.env.example`, GitHub Actions 테스트 워크플로
+- [x] Dockerfile (LibreOffice·Chromium 포함)
+- [x] README 갱신 (AI 연결 방법, 대시보드, 비교)
+- [x] 전체 테스트·브라우저 확인·푸시
 
 ## 4. 이후 확장 아이디어 (범위 밖)
 - 청중 구성(여러 페르소나 비율)에 따른 종합 점수
