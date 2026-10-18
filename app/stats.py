@@ -60,6 +60,22 @@ def dashboard() -> dict:
     cells = {meta["id"]: {r["_persona_id"]: r["overall"]["score"] for r in rs}
              for meta, rs in data if meta in matrix_docs}
 
+    groups: dict[str, list[tuple[dict, list[dict]]]] = defaultdict(list)
+    for meta, rs in data:
+        if rs:
+            groups[meta.get("group_id", meta["id"])].append((meta, rs))
+    versions = []
+    for items in groups.values():
+        if len(items) < 2:
+            continue
+        items.sort(key=lambda x: x[0].get("version", 1))
+        versions.append({
+            "filename": items[-1][0]["filename"],
+            "points": [{"doc_id": m["id"], "version": m.get("version", 1),
+                        "avg_score": round(sum(r["overall"]["score"] for r in rs) / len(rs), 1),
+                        "issues": sum(sum(r["overall"]["counts"].values()) for r in rs)} for m, rs in items],
+        })
+
     recent = sorted(all_results, key=lambda x: x[1]["created_at"], reverse=True)[:10]
     return {
         "totals": {
@@ -76,6 +92,7 @@ def dashboard() -> dict:
             "personas": [{"id": pid, "name": name, "icon": icon} for pid, name, icon in matrix_personas],
             "cells": cells,
         },
+        "versions": versions,
         "recent": [{"doc_id": meta["id"], "filename": meta["filename"], "persona_id": r["_persona_id"],
                     "persona_name": r["persona"]["name"], "icon": r["persona"].get("icon", ""),
                     "score": r["overall"]["score"], "counts": r["overall"]["counts"],

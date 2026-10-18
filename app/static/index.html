@@ -72,10 +72,17 @@
           <div id="doc-title" class="doc-title"></div>
           <div id="doc-sub" class="muted"></div>
         </div>
-        <div class="exports" id="exports"></div>
+        <div class="exports">
+          <label class="btn" title="고친 자료를 올리면 이 버전과 비교합니다">⬆ 수정본 올리기
+            <input id="version-input" type="file" hidden
+                   accept=".pdf,.ppt,.pptx,.odp,.key,.doc,.docx,.odt,.html,.htm,.png,.jpg,.jpeg,.webp,.gif,.bmp">
+          </label>
+          <span id="exports" class="exports"></span>
+        </div>
       </div>
       <nav id="tabs" class="tabs"></nav>
       <div id="overall" class="overall"></div>
+      <div id="compare" class="compare" hidden></div>
       <div class="filters" id="filters"></div>
       <div class="split">
         <div id="pages" class="pages"></div>

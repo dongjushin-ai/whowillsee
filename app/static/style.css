@@ -277,3 +277,24 @@ dialog h2 { margin-top: 0; }
   .kpis { grid-template-columns: 1fr 1fr; }
   .dash-grid { grid-template-columns: 1fr; }
 }
+
+/* ---------- 수정본 비교 ---------- */
+.vtag { font-size: 11px; font-weight: 700; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 0 5px; margin-left: 4px; }
+.compare { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 18px; margin-bottom: 12px; }
+.compare-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.compare-head h3 { margin: 0; font-size: 14px; }
+.delta { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.delta.up { color: #006300; }
+.delta.down { color: var(--critical); }
+.compare-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 10px; }
+.compare-col h4 { margin: 0 0 6px; font-size: 13px; }
+.compare-col ul { margin: 0; padding-left: 0; list-style: none; font-size: 13px; }
+.compare-col li { padding: 3px 0; border-bottom: 1px dashed var(--line); }
+.compare-col li.link { cursor: pointer; }
+.compare-col li.link:hover { color: var(--accent); }
+.compare-col .tag { font-size: 11px; color: var(--muted); }
+.compare-note { font-size: 11px; color: var(--muted); margin-top: 8px; }
+.trend-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 8px 4px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.trend-steps { display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; flex-wrap: wrap; }
+.trend-steps .step-score { font-weight: 700; }
+@media (max-width: 800px) { .compare-cols { grid-template-columns: 1fr; } }

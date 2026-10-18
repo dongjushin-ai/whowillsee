@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import analyzer, converter, exporter, personas, providers, stats, storage
+from . import analyzer, compare, converter, exporter, personas, providers, stats, storage
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -122,7 +122,9 @@ def delete_persona(persona_id: str):
 # ------------------------------------------------------------------ 문서
 
 @app.post("/api/documents", status_code=201)
-def upload_document(file: UploadFile | None = File(default=None), url: str = Form(default="")):
+def upload_document(file: UploadFile | None = File(default=None), url: str = Form(default=""),
+                    parent_id: str = Form(default="")):
+    parent = _doc_meta(parent_id) if parent_id else None  # 수정본이면 이전 버전과 연결
     doc_id = storage.new_id()
     out = storage.doc_dir(doc_id)
     out.mkdir(parents=True)
@@ -158,6 +160,9 @@ def upload_document(file: UploadFile | None = File(default=None), url: str = For
         "filename": filename,
         "kind": kind,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "parent_id": parent["id"] if parent else None,
+        "group_id": (parent.get("group_id") or parent["id"]) if parent else doc_id,
+        "version": parent.get("version", 1) + 1 if parent else 1,
         "pages": [p.to_dict() for p in pages],
     }
     storage.write_json(out / "meta.json", meta)
@@ -172,6 +177,8 @@ def list_documents():
         if meta:
             docs.append({"id": meta["id"], "filename": meta["filename"], "kind": meta["kind"],
                          "created_at": meta["created_at"], "page_count": len(meta["pages"]),
+                         "version": meta.get("version", 1), "parent_id": meta.get("parent_id"),
+                         "group_id": meta.get("group_id", meta["id"]),
                          "analyzed": sorted(p.stem for p in (d / "results").glob("*.json"))})
     docs.sort(key=lambda m: m["created_at"], reverse=True)
     return docs
@@ -283,6 +290,20 @@ def _result(doc_id: str, persona_id: str) -> dict:
 @app.get("/api/documents/{doc_id}/results/{persona_id}")
 def get_result(doc_id: str, persona_id: str):
     return _result(doc_id, persona_id)
+
+
+@app.get("/api/documents/{doc_id}/compare/{persona_id}")
+def compare_with_previous(doc_id: str, persona_id: str):
+    meta = _doc_meta(doc_id)
+    if not meta.get("parent_id"):
+        raise HTTPException(404, "이전 버전이 없는 문서입니다.")
+    prev_meta = storage.read_json(storage.doc_dir(meta["parent_id"]) / "meta.json")
+    if not prev_meta:
+        raise HTTPException(404, "이전 버전이 삭제되었습니다.")
+    prev_result = storage.read_json(storage.results_dir(prev_meta["id"]) / f"{_id_or_404(persona_id)}.json")
+    if not prev_result:
+        raise HTTPException(404, "이전 버전에 이 청중의 분석 결과가 없습니다.")
+    return compare.compare(prev_meta, prev_result, meta, _result(doc_id, persona_id))
 
 
 # ------------------------------------------------------------------ 내보내기

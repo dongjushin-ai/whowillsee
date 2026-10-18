@@ -322,8 +322,8 @@ def _analyze_demo(pages: list[dict], persona: Persona) -> dict:
         blocks = page.get("blocks") or []
         if not blocks:
             issues.append(_demo_issue([], "suggestion", "기타", "이미지 내용은 데모 모드에서 분석되지 않습니다",
-                                      "데모 모드는 추출된 텍스트만 검사합니다. API 키를 설정하면 그림·차트까지 분석합니다.",
-                                      "ANTHROPIC_API_KEY 를 설정하고 다시 분석하세요.", "이 그림은 무슨 뜻이지?",
+                                      "데모 모드는 추출된 텍스트만 검사합니다. AI를 연결하면 그림·차트까지 분석합니다.",
+                                      "상단 'AI 연결'에서 내 AI를 연결하고 다시 분석하세요.", "이 그림은 무슨 뜻이지?",
                                       bbox={"x": 0, "y": 0, "w": 1, "h": 1}))
         # 아주 작은 글씨(각주 등)는 블록별로, 조금 작은 글씨는 페이지당 하나로 묶어 지적한다
         smallish = [b for b in blocks if b.get("font_size") and 10 <= b["font_size"] < small_limit]
@@ -382,7 +382,7 @@ def _analyze_demo(pages: list[dict], persona: Persona) -> dict:
             "score": score,
             "first_impression": "(데모 모드) 텍스트 규칙만으로 추정한 결과입니다.",
             "summary": f"{persona.name} 관점에서 용어·글자 크기·정보 밀도·누락 정보를 규칙 기반으로 점검했습니다. "
-                       "실제 페르소나 시뮬레이션은 Claude API 키를 설정하면 동작합니다.",
+                       "실제 페르소나 시뮬레이션은 상단 'AI 연결'에서 내 AI를 연결하면 동작합니다.",
             "strengths": [],
             "top_fixes": ["전문용어를 쉬운 말로 바꾸기", "작은 글씨 키우기", "미정·별첨 정보 채우기"],
         },

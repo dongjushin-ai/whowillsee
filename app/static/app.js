@@ -296,15 +296,16 @@ async function loadDocs() {
 function renderDocs() {
   $("#doc-list").replaceChildren(...state.docs.slice(0, 12).map((d) =>
     el("div", { class: "doc-item" + (state.doc?.id === d.id ? " active" : ""), onclick: () => openDoc(d.id) },
-      el("span", { class: "fn", title: d.filename }, `${d.filename}`),
+      el("span", { class: "fn", title: d.filename }, `${d.filename}`, d.version > 1 ? el("span", { class: "vtag" }, `v${d.version}`) : null),
       el("span", { class: "muted" }, `${d.page_count}p`),
       el("button", { title: "삭제", onclick: (e) => { e.stopPropagation(); deleteDoc(d); } }, "✕"),
     )));
 }
 
-async function upload(file) {
+async function upload(file, parentId = null) {
   const fd = new FormData();
   fd.append("file", file);
+  if (parentId) fd.append("parent_id", parentId);
   await sendDocument(fd, file.name);
 }
 
@@ -340,7 +341,20 @@ async function openDoc(id, personaId = null) {
   $("#viewer").hidden = false;
   $("#analyze-btn").disabled = false;
   $("#doc-title").textContent = state.doc.filename;
-  $("#doc-sub").textContent = `${state.doc.pages.length}페이지 · ${state.doc.created_at}`;
+  const ver = state.doc.version > 1 ? ` · v${state.doc.version} (수정본)` : "";
+  $("#doc-sub").textContent = `${state.doc.pages.length}페이지 · ${state.doc.created_at}${ver}`;
+  if (!state.results.length && state.doc.parent_id) {
+    // 수정본은 이전 버전과 같은 청중으로 분석하도록 미리 선택한다
+    try {
+      const prev = await api(`/api/documents/${state.doc.parent_id}/results`);
+      if (prev.length) {
+        state.selected = new Set(prev.map((r) => r.persona_id).filter((id) => state.personas.some((p) => p.id === id)));
+        if (!state.selected.size) state.selected.add("general-citizen");
+        renderPersonas();
+        toast("이전 버전과 같은 청중을 선택했습니다. '분석 시작'을 누르면 비교 결과가 나옵니다.", 5000);
+      }
+    } catch (_) { /* 이전 버전이 삭제됨 */ }
+  }
   renderDocs();
   const pick = personaId || state.activePersona;
   const target = state.results.find((r) => r.persona_id === pick) || state.results[0];
@@ -427,6 +441,7 @@ function scoreColor(score) {
 function render() {
   renderTabs();
   renderOverall();
+  renderCompare();
   renderFilters();
   renderPages();
   renderMemos();
@@ -553,6 +568,45 @@ function renderExports() {
   );
 }
 
+async function renderCompare() {
+  const box = $("#compare");
+  box.hidden = true;
+  if (!state.result || !state.doc.parent_id) return;
+  const docId = state.doc.id;
+  const personaId = state.activePersona;
+  let c;
+  try {
+    c = await api(`/api/documents/${docId}/compare/${personaId}`);
+  } catch (_) {
+    return; // 이전 버전에 같은 청중의 결과가 없음
+  }
+  if (state.doc.id !== docId || state.activePersona !== personaId) return;
+  const d = c.delta_score;
+  const sevLabel = (i) => `${SEV[i.severity]}·${i.category}`;
+  const item = (i, link) => el("li", link ? { class: "link", onclick: () => highlight(i.n, "box") } : {},
+    `#${i.n} ${i.title} `, el("span", { class: "tag" }, `p.${i.page} ${sevLabel(i)}`));
+  const changeText = { better: " (완화됨)", worse: " (악화됨)", same: "" };
+  box.replaceChildren(
+    el("div", { class: "compare-head" },
+      el("h3", {}, `v${c.prev.version} → v${c.cur.version} 비교`),
+      el("span", { class: `delta ${d > 0 ? "up" : d < 0 ? "down" : ""}` }, `${c.prev.score} → ${c.cur.score} (${d > 0 ? "+" : ""}${d})`),
+      el("span", { class: "muted" }, `해결 ${c.resolved.length} · 남음 ${c.remaining.length} · 새로 생김 ${c.new.length}`)),
+    el("div", { class: "compare-cols" },
+      el("div", { class: "compare-col" }, el("h4", {}, `✓ 해결된 지적 (${c.resolved.length})`),
+        el("ul", {}, ...c.resolved.map((i) => item(i, false)), c.resolved.length ? null : el("li", { class: "muted" }, "없음"))),
+      el("div", { class: "compare-col" }, el("h4", {}, `↻ 아직 남은 지적 (${c.remaining.length})`),
+        el("ul", {}, ...c.remaining.map((r) => {
+          const li = item(r.cur, true);
+          li.append(el("span", { class: "tag" }, changeText[r.change]));
+          return li;
+        }), c.remaining.length ? null : el("li", { class: "muted" }, "없음"))),
+      el("div", { class: "compare-col" }, el("h4", {}, `＋ 새로 생긴 지적 (${c.new.length})`),
+        el("ul", {}, ...c.new.map((i) => item(i, true)), c.new.length ? null : el("li", { class: "muted" }, "없음")))),
+    el("div", { class: "compare-note" }, "같은 문제인지는 유형·제목·해당 문구의 유사도로 추정합니다. 해결된 지적은 이전 버전의 번호입니다."),
+  );
+  box.hidden = false;
+}
+
 // ------------------------------------------------------------------ 이벤트
 
 function bind() {
@@ -561,6 +615,11 @@ function bind() {
   $("#persona-form").addEventListener("submit", savePersona);
   $("#persona-form").addEventListener("input", syncRangeOutputs);
   $("#analyze-btn").addEventListener("click", startAnalysis);
+
+  $("#version-input").addEventListener("change", (e) => {
+    if (e.target.files[0] && state.doc) upload(e.target.files[0], state.doc.id);
+    e.target.value = "";
+  });
 
   const dz = $("#dropzone");
   $("#file-input").addEventListener("change", (e) => {
@@ -665,6 +724,19 @@ async function loadDashboard() {
       el("div", { class: "desc" }, "칸을 누르면 그 결과로 이동합니다. 최근 자료 12개까지 표시합니다."),
       el("div", { class: "ramp-legend" }, "0", ...SEQ.map((c) => el("i", { style: `background:${c}` })), "100"),
       heatTable(d.matrix)),
+    d.versions.length ? el("div", { class: "card", style: "margin-bottom:16px" },
+      el("h2", {}, "수정본 개선 추이"),
+      el("div", { class: "desc" }, "버전별 평균 전달력 (그 버전을 분석한 모든 청중의 평균)과 지적 수."),
+      ...d.versions.map((v) => el("div", { class: "trend-row" },
+        el("span", { class: "fn" }, v.filename),
+        el("span", { class: "trend-steps" }, ...v.points.flatMap((pt, i) => [
+          i ? el("span", { class: "muted" }, "→") : null,
+          el("span", { title: `지적 ${pt.issues}건` }, el("span", { class: "vtag" }, `v${pt.version}`), " ",
+            el("span", { class: "step-score" }, pt.avg_score)),
+        ]), (() => {
+          const diff = Math.round((v.points.at(-1).avg_score - v.points[0].avg_score) * 10) / 10;
+          return el("span", { class: `delta ${diff > 0 ? "up" : diff < 0 ? "down" : ""}`, style: "font-size:14px" }, `${diff > 0 ? "+" : ""}${diff}`);
+        })())))) : null,
     el("div", { class: "card" },
       el("h2", {}, "최근 분석"),
       el("div", { class: "recent" }, ...d.recent.map((r) =>

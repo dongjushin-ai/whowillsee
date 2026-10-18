@@ -32,9 +32,32 @@ SLIDES = [
 ]
 
 
-def make_pdf(path: Path) -> Path:
+# 일반 시민 관점의 지적을 일부 반영한 수정본 (수정본 비교 데모용)
+SLIDES_V2 = [
+    {
+        "title": "우리 동네 스마트시티, 무엇이 좋아지나요?",
+        "body": [
+            "■ 버스 도착, 주차 빈자리, 미세먼지 정보를 한 앱에서 확인",
+            "■ 운영비(TCO) 23.7% 절감, ROI 312% → 생활 서비스에 다시 투자",
+            "■ 데이터 관리 체계(거버넌스) 정비로 개인정보 보호 강화",
+        ],
+        "footnote": "※ 비용 산출 근거: 시 홈페이지 > 정책자료실 (문의 02-123-4567)",
+    },
+    {
+        "title": "언제부터 쓸 수 있나요?",
+        "body": [
+            "2025년 3월: 시범 운영 (3개 동)",
+            "2025년 9월: 전체 동 확대",
+            "신청: 앱 설치 또는 주민센터 방문 (세부 절차는 추후 공지)",
+        ],
+        "footnote": "문의: 데이터정책과 02-123-4567",
+    },
+]
+
+
+def make_pdf(path: Path, slides: list[dict] | None = None, footnote_size: float = 8) -> Path:
     doc = pymupdf.open()
-    for slide in SLIDES:
+    for slide in slides or SLIDES:
         page = doc.new_page(width=960, height=540)
         page.draw_rect(pymupdf.Rect(0, 0, 960, 90), color=None, fill=(0.12, 0.2, 0.45))
         page.insert_text((40, 58), slide["title"], fontname="korea", fontsize=28, color=(1, 1, 1))
@@ -43,7 +66,7 @@ def make_pdf(path: Path) -> Path:
             page.insert_text((40, y), line, fontname="korea", fontsize=17)
             y += 34
         # 일부러 너무 작고 흐린 각주
-        page.insert_text((40, 515), slide["footnote"], fontname="korea", fontsize=8, color=(0.7, 0.7, 0.7))
+        page.insert_text((40, 515), slide["footnote"], fontname="korea", fontsize=footnote_size, color=(0.7, 0.7, 0.7))
     doc.save(path)
     return path
 
@@ -98,7 +121,8 @@ def make_html(path: Path) -> Path:
 
 def make_all(out: Path) -> list[Path]:
     out.mkdir(parents=True, exist_ok=True)
-    made = [make_pdf(out / "sample_briefing.pdf"), make_html(out / "sample_notice.html")]
+    made = [make_pdf(out / "sample_briefing.pdf"), make_html(out / "sample_notice.html"),
+            make_pdf(out / "sample_briefing_v2.pdf", SLIDES_V2, footnote_size=12)]
     pptx = make_pptx(out / "sample_briefing.pptx")
     if pptx:
         made.append(pptx)
