@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WhoWillSee</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>👁️</text></svg>">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">👁️ <b>WhoWillSee</b> <span class="tagline">누가 보느냐에 따라 자료는 다르게 읽힌다</span></div>
+  <span id="mode-badge" class="badge"></span>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <section>
+      <h2><span class="step">1</span> 누가 보나요? <small>(여러 명 선택 가능)</small></h2>
+      <div id="persona-list" class="persona-list"></div>
+      <button id="new-persona" class="btn ghost full">+ 새 페르소나 만들기</button>
+    </section>
+
+    <section>
+      <h2><span class="step">2</span> 자료 올리기</h2>
+      <label id="dropzone" class="dropzone">
+        <input id="file-input" type="file" hidden
+               accept=".pdf,.ppt,.pptx,.odp,.key,.doc,.docx,.odt,.html,.htm,.png,.jpg,.jpeg,.webp,.gif,.bmp">
+        <div class="dz-icon">📄</div>
+        <div>파일을 끌어다 놓거나 <u>클릭</u></div>
+        <small>PDF · PPT/PPTX · DOCX · HTML · 이미지</small>
+      </label>
+      <form id="url-form" class="url-form">
+        <input id="url-input" type="url" placeholder="또는 웹페이지 URL (https://…)">
+        <button class="btn ghost" type="submit">가져오기</button>
+      </form>
+      <div id="doc-list" class="doc-list"></div>
+    </section>
+
+    <section>
+      <h2><span class="step">3</span> 어떤 상황인가요? <small>(선택)</small></h2>
+      <textarea id="context-input" rows="3"
+                placeholder="예) 구청 주민설명회에서 10분 발표, 질의응답 있음. 목적은 사업 이해와 참여 독려."></textarea>
+      <button id="analyze-btn" class="btn primary full" disabled>분석 시작</button>
+      <div id="progress" class="progress"></div>
+    </section>
+  </aside>
+
+  <main class="main">
+    <div id="empty" class="empty">
+      <h1>자료를 청중의 눈으로 미리 읽어보세요</h1>
+      <ol>
+        <li>왼쪽에서 <b>청중(페르소나)</b>을 고르세요. 기본은 <b>일반 시민</b>이고, 직군·소속·성격·니즈·취향·전문성을 직접 설정한 페르소나를 만들 수도 있습니다.</li>
+        <li>발표 자료, 브리핑, PPT, PDF, HTML, 이미지를 올리세요.</li>
+        <li><b>분석 시작</b>을 누르면 그 사람이 막히거나 오해할 지점에 <span class="red">빨간 박스</span>와 이유 메모가 붙습니다.</li>
+      </ol>
+    </div>
+
+    <div id="viewer" class="viewer" hidden>
+      <div class="doc-head">
+        <div>
+          <div id="doc-title" class="doc-title"></div>
+          <div id="doc-sub" class="muted"></div>
+        </div>
+        <div class="exports" id="exports"></div>
+      </div>
+      <nav id="tabs" class="tabs"></nav>
+      <div id="overall" class="overall"></div>
+      <div class="filters" id="filters"></div>
+      <div class="split">
+        <div id="pages" class="pages"></div>
+        <aside id="memos" class="memos"></aside>
+      </div>
+    </div>
+  </main>
+</div>
+
+<dialog id="persona-dialog">
+  <form id="persona-form" method="dialog">
+    <h2 id="persona-dialog-title">새 페르소나</h2>
+    <div class="grid">
+      <label class="span2">이름 *<input name="name" required maxlength="60" placeholder="예) 30대 맞벌이 학부모"></label>
+      <label>아이콘<input name="icon" maxlength="8" placeholder="🙂"></label>
+      <label>연령대<input name="age_group" placeholder="예) 30대"></label>
+      <label>직군<input name="occupation" placeholder="예) 간호사, 개발자, 자영업"></label>
+      <label>소속<input name="organization" placeholder="예) 대학병원, 스타트업, 구청"></label>
+      <label class="span2">직위·역할<input name="role" placeholder="예) 예산 승인권자, 서비스 이용자, 심사위원"></label>
+      <label>자료 주제 전문성 <output data-for="expertise_level"></output>
+        <input name="expertise_level" type="range" min="1" max="5" value="2"></label>
+      <label>디지털 숙련도 <output data-for="digital_literacy"></output>
+        <input name="digital_literacy" type="range" min="1" max="5" value="3"></label>
+      <label class="span2">잘 아는 분야<input name="domain_knowledge" placeholder="예) 재무 지표는 능숙, IT 용어는 모름"></label>
+      <label class="span2">성격·성향<textarea name="personality" rows="2" placeholder="예) 꼼꼼하고 의심이 많음, 결론부터 듣고 싶어함"></textarea></label>
+      <label class="span2">니즈·목적<textarea name="needs" rows="2" placeholder="예) 우리 아이 학교에 언제부터 적용되는지, 비용 부담이 있는지"></textarea></label>
+      <label class="span2">선호·취향<textarea name="preferences" rows="2" placeholder="예) 그림과 예시, 짧은 문장, 표보다는 그래프"></textarea></label>
+      <label class="span2">우려·민감한 점<textarea name="concerns" rows="2" placeholder="예) 개인정보, 추가 비용, 책임 회피성 표현"></textarea></label>
+      <label class="span2">자료를 접하는 상황<input name="context" placeholder="예) 퇴근길 스마트폰으로 2분, 설명회 현장 스크린"></label>
+      <label class="span2">기타<textarea name="extra" rows="2"></textarea></label>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" class="btn ghost" id="persona-cancel">취소</button>
+      <button type="submit" class="btn primary">저장</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

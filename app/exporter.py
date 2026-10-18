@@ -97,6 +97,7 @@ def annotated_pdf(meta: dict, doc_path: Path, result: dict) -> bytes:
         page = doc.new_page(width=pw, height=ph)
         page.insert_image(page.rect, filename=str(doc_path / src["image"]))
         page.insert_font(fontname="kr", fontbuffer=_FONT.buffer)
+        same_box: dict[tuple, int] = {}
         for issue in rpage["issues"]:
             b = issue["box"]
             rect = pymupdf.Rect(b["x"] * pw, b["y"] * ph, (b["x"] + b["w"]) * pw, (b["y"] + b["h"]) * ph)
@@ -107,7 +108,9 @@ def annotated_pdf(meta: dict, doc_path: Path, result: dict) -> bytes:
             annot.set_info(title=f"#{issue['n']} {LABELS[issue['severity']]} · {persona['name']}",
                            content=_memo(issue))
             annot.update()
-            _badge(page, rect, issue["n"], color)
+            key = tuple(round(issue["box"][k], 2) for k in ("x", "y", "w", "h"))
+            same_box[key] = same_box.get(key, -1) + 1
+            _badge(page, rect, issue["n"], color, same_box[key])
         if rpage["issues"]:
             w.new_page()
             w.text(f"페이지 {rpage['page']} 메모", size=15, gap=8)
@@ -129,11 +132,15 @@ def _memo(issue: dict) -> str:
     return "\n".join(parts)
 
 
-def _badge(page: pymupdf.Page, rect: pymupdf.Rect, n: int, color) -> None:
-    # 박스 왼쪽 바깥에 두어 위아래로 붙은 박스끼리 배지가 겹치지 않게 한다
+def _badge(page: pymupdf.Page, rect: pymupdf.Rect, n: int, color, slot: int = 0) -> None:
+    # 박스 왼쪽 바깥에 두어 위아래로 붙은 박스끼리 배지가 겹치지 않게 한다.
+    # 같은 박스를 가리키는 지적이 여럿이면(slot) 박스 위쪽 가장자리를 따라 나란히 놓는다.
     r = 9
     cx = rect.x0 - r - 2 if rect.x0 > 2 * r + 4 else rect.x0 + r + 2
     cy = rect.y0 + min(r + 1, rect.height / 2)
+    if slot:
+        cx = rect.x0 + r + 2 + (slot - 1) * (2 * r + 3)
+        cy = rect.y0 - r - 1 if rect.y0 > 2 * r + 2 else rect.y0 + r + 1
     page.draw_circle((cx, cy), r, color=color, fill=color)
     label = str(n)
     size = 10 if n < 100 else 8
