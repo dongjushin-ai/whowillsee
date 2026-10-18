@@ -20,12 +20,16 @@
     <a href="#settings" data-view="settings">AI 연결</a>
   </nav>
   <div class="top-right">
+    <select id="lang-select" class="theme-btn" aria-label="Language / 언어">
+      <option value="ko">한국어</option>
+      <option value="en">English</option>
+    </select>
     <button type="button" id="theme-btn" class="theme-btn">🌓 자동</button>
     <a id="mode-badge" class="badge" href="#settings"></a>
   </div>
 </header>
 
-<div id="ai-banner" class="ai-banner" hidden>
+<div id="ai-banner" class="ai-banner" data-i18n-html="banner" hidden>
   AI가 연결되지 않아 <b>데모 모드</b>(규칙 기반)로 분석합니다. 내 Claude·OpenAI·Gemini·Ollama 등을 연결하면 페르소나가 직접 자료를 읽고 평가합니다.
   <a href="#settings">AI 연결하기 →</a>
 </div>
@@ -69,7 +73,7 @@
   <main class="main">
     <div id="empty" class="empty">
       <h1>자료를 청중의 눈으로 미리 읽어보세요</h1>
-      <ol>
+      <ol data-i18n-html="empty">
         <li>왼쪽에서 <b>청중(페르소나)</b>을 고르세요. 기본은 <b>일반 시민</b>이고, 직군·소속·성격·니즈·취향·전문성을 직접 설정한 페르소나를 만들 수도 있습니다.</li>
         <li>발표 자료, 브리핑, PPT, PDF, HTML, 이미지를 올리세요.</li>
         <li><b>분석 시작</b>을 누르면 그 사람이 막히거나 오해할 지점에 <span class="red">빨간 박스</span>와 이유 메모가 붙습니다.</li>
@@ -117,7 +121,7 @@
 <div id="view-settings" class="page-view" hidden>
   <div class="settings">
     <h1>AI 연결</h1>
-    <p class="muted">WhoWillSee는 특정 AI 계정에 묶여 있지 않습니다. 사용하는 사람이 자기 AI를 연결하세요.
+    <p class="muted" data-i18n-html="settings_intro">WhoWillSee는 특정 AI 계정에 묶여 있지 않습니다. 사용하는 사람이 자기 AI를 연결하세요.
       입력한 키는 이 서버의 <code>data/settings.json</code>에만 저장되고(깃에 올라가지 않음), 화면에는 일부만 표시됩니다.</p>
     <div id="settings-locked" class="note warn" hidden>이 서버는 관리자가 AI 설정을 잠가 두었습니다 (WHOWILLSEE_LOCK_SETTINGS).</div>
     <form id="settings-form">
@@ -184,7 +188,7 @@
     </form>
     <details class="help">
       <summary>환경 변수로 설정하기 (서버 운영자용)</summary>
-      <p>화면에서 저장한 설정이 없으면 환경 변수를 씁니다. <code>ANTHROPIC_API_KEY</code>가 있으면 Claude,
+      <p data-i18n-html="env_help">화면에서 저장한 설정이 없으면 환경 변수를 씁니다. <code>ANTHROPIC_API_KEY</code>가 있으면 Claude,
         <code>OPENAI_API_KEY</code> + <code>OPENAI_BASE_URL</code> + <code>WHOWILLSEE_MODEL</code>이 있으면 OpenAI 호환 API를 씁니다.
         여러 사람이 쓰는 서버라면 <code>WHOWILLSEE_LOCK_SETTINGS=1</code>로 화면에서 설정을 바꾸지 못하게 잠그세요.</p>
     </details>
@@ -269,6 +273,7 @@
 
 <div id="toast" class="toast" hidden></div>
 <div id="tooltip" class="tooltip" hidden></div>
+<script src="/static/i18n.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

@@ -13,13 +13,15 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import (analyzer, audiences, compare, converter, exporter, persona_gen, personas, providers, recording,
                report_html, script, speech, stats, storage, video)
+
+Lang = Query(default="ko", pattern="^(ko|en)$")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -151,8 +153,8 @@ def test_speech(update: speech.SpeechUpdate):
 # ------------------------------------------------------------------ 페르소나
 
 @app.get("/api/personas")
-def list_personas():
-    return [p.model_dump() for p in personas.list_personas()]
+def list_personas(lang: str = Lang):
+    return [p.model_dump() for p in personas.list_personas(lang)]
 
 
 @app.post("/api/personas", status_code=201)
@@ -162,13 +164,14 @@ def create_persona(data: personas.PersonaIn):
 
 class GenerateRequest(BaseModel):
     description: str = Field(min_length=2, max_length=500)
+    lang: str = Field(default="ko", pattern="^(ko|en)$")
 
 
 @app.post("/api/personas/generate")
 def generate_persona(req: GenerateRequest):
     """저장하지 않고 초안만 돌려준다 - 사용자가 폼에서 검토 후 저장한다."""
     try:
-        persona, engine = persona_gen.generate(req.description)
+        persona, engine = persona_gen.generate(req.description, req.lang)
     except providers.ProviderError as exc:
         raise HTTPException(502, str(exc)) from None
     return {"persona": persona.model_dump(), "engine": engine}
@@ -201,8 +204,8 @@ def delete_persona(persona_id: str):
 # ------------------------------------------------------------------ 청중 그룹
 
 @app.get("/api/audiences")
-def list_audiences():
-    return [a.model_dump() for a in audiences.list_audiences()]
+def list_audiences(lang: str = Lang):
+    return [a.model_dump() for a in audiences.list_audiences(lang)]
 
 
 @app.post("/api/audiences", status_code=201)
@@ -508,6 +511,7 @@ class AnalyzeRequest(BaseModel):
     persona_ids: list[str] = Field(default_factory=lambda: [personas.DEFAULT_PERSONA_ID], max_length=8)
     audience_id: str = ""  # 지정하면 그룹 구성원을 함께 분석한다
     context: str = Field(default="", max_length=2000)
+    lang: str = Field(default="ko", pattern="^(ko|en)$")  # 분석 결과를 쓸 언어
 
 
 @app.post("/api/documents/{doc_id}/analyze", status_code=202)
@@ -515,7 +519,7 @@ def start_analysis(doc_id: str, req: AnalyzeRequest):
     meta = _doc_meta(doc_id)
     persona_ids, context = list(req.persona_ids), req.context
     if req.audience_id:
-        audience = audiences.get_audience(req.audience_id)
+        audience = audiences.get_audience(req.audience_id, req.lang)
         if not audience:
             raise HTTPException(404, "청중 그룹을 찾을 수 없습니다.")
         persona_ids = [m.persona_id for m in audience.members] + persona_ids
@@ -526,7 +530,7 @@ def start_analysis(doc_id: str, req: AnalyzeRequest):
         raise HTTPException(400, "한 번에 분석할 수 있는 페르소나는 12명까지입니다.")
     selected = []
     for pid in dict.fromkeys(persona_ids):
-        persona = personas.get_persona(pid)
+        persona = personas.get_persona(pid, req.lang)
         if not persona:
             raise HTTPException(404, f"페르소나를 찾을 수 없습니다: {pid}")
         selected.append(persona)
@@ -538,11 +542,11 @@ def start_analysis(doc_id: str, req: AnalyzeRequest):
         _jobs[job_id] = job
         _save_job(job)
     for persona in selected:
-        _executor.submit(_run_analysis, job, meta, persona, context)
+        _executor.submit(_run_analysis, job, meta, persona, context, req.lang)
     return _job_view(job)
 
 
-def _run_analysis(job: dict, meta: dict, persona: personas.Persona, context: str) -> None:
+def _run_analysis(job: dict, meta: dict, persona: personas.Persona, context: str, lang: str = "ko") -> None:
     item = job["items"][persona.id]
     item["status"] = "running"
 
@@ -551,7 +555,7 @@ def _run_analysis(job: dict, meta: dict, persona: personas.Persona, context: str
 
     try:
         doc_path = storage.doc_dir(meta["id"])
-        result = analyzer.analyze(meta, doc_path, persona, context, progress)
+        result = analyzer.analyze(meta, doc_path, persona, context, progress, lang)
         storage.write_json(storage.results_dir(meta["id"]) / f"{persona.id}.json", result)
         item["status"] = "done"
     except analyzer.AnalysisError as exc:
@@ -617,78 +621,78 @@ def compare_with_previous(doc_id: str, persona_id: str):
     return compare.compare(prev_meta, prev_result, meta, _result(doc_id, persona_id))
 
 
-def _audience_result(doc_id: str, audience_id: str) -> dict:
+def _audience_result(doc_id: str, audience_id: str, lang: str = "ko") -> dict:
     _doc_meta(doc_id)
-    audience = audiences.get_audience(audience_id)
+    audience = audiences.get_audience(audience_id, lang)
     if not audience:
         raise HTTPException(404, "청중 그룹을 찾을 수 없습니다.")
     results = {m.persona_id: r for m in audience.members
                if (r := storage.read_json(storage.results_dir(doc_id) / f"{m.persona_id}.json"))}
     if not results:
         raise HTTPException(404, "이 그룹의 구성원 분석 결과가 없습니다.")
-    return audiences.aggregate(audience, results)
+    return audiences.aggregate(audience, results, lang)
 
 
 @app.get("/api/documents/{doc_id}/audiences")
-def list_document_audiences(doc_id: str):
+def list_document_audiences(doc_id: str, lang: str = Lang):
     """이 문서에서 구성원이 모두 분석된 청중 그룹."""
     _doc_meta(doc_id)
     analyzed = {p.stem for p in storage.results_dir(doc_id).glob("*.json")}
     out = []
-    for a in audiences.list_audiences():
+    for a in audiences.list_audiences(lang):
         if {m.persona_id for m in a.members} <= analyzed:
-            agg = _audience_result(doc_id, a.id)
+            agg = _audience_result(doc_id, a.id, lang)
             out.append({"audience_id": a.id, "name": a.name, "icon": a.icon, "score": agg["overall"]["score"],
                         "counts": agg["overall"]["counts"]})
     return out
 
 
 @app.get("/api/documents/{doc_id}/audiences/{audience_id}")
-def get_audience_result(doc_id: str, audience_id: str):
-    return _audience_result(doc_id, audience_id)
+def get_audience_result(doc_id: str, audience_id: str, lang: str = Lang):
+    return _audience_result(doc_id, audience_id, lang)
 
 
 # ------------------------------------------------------------------ 내보내기
 
 @app.get("/api/documents/{doc_id}/audiences/{audience_id}/export.pdf")
-def export_audience_pdf(doc_id: str, audience_id: str):
-    meta, result = _doc_meta(doc_id), _audience_result(doc_id, audience_id)
-    return _pdf_response(meta, doc_id, result, f"whowillsee_{doc_id}_{audience_id}.pdf")
+def export_audience_pdf(doc_id: str, audience_id: str, lang: str = Lang):
+    meta, result = _doc_meta(doc_id), _audience_result(doc_id, audience_id, lang)
+    return _pdf_response(meta, doc_id, result, f"whowillsee_{doc_id}_{audience_id}.pdf", lang)
 
 
 @app.get("/api/documents/{doc_id}/audiences/{audience_id}/export.json")
-def export_audience_json(doc_id: str, audience_id: str):
-    result = _audience_result(doc_id, audience_id)
+def export_audience_json(doc_id: str, audience_id: str, lang: str = Lang):
+    result = _audience_result(doc_id, audience_id, lang)
     return JSONResponse(result, headers={"Content-Disposition":
                                          f'attachment; filename="whowillsee_{doc_id}_{audience_id}.json"'})
 
 
-def _pdf_response(meta: dict, doc_id: str, result: dict, name: str) -> Response:
-    data = exporter.annotated_pdf(meta, storage.doc_dir(doc_id), result)
+def _pdf_response(meta: dict, doc_id: str, result: dict, name: str, lang: str = "ko") -> Response:
+    data = exporter.annotated_pdf(meta, storage.doc_dir(doc_id), result, lang)
     return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.get("/api/documents/{doc_id}/results/{persona_id}/export.pdf")
-def export_pdf(doc_id: str, persona_id: str):
+def export_pdf(doc_id: str, persona_id: str, lang: str = Lang):
     meta, result = _doc_meta(doc_id), _result(doc_id, persona_id)
-    return _pdf_response(meta, doc_id, result, f"whowillsee_{doc_id}_{persona_id}.pdf")
+    return _pdf_response(meta, doc_id, result, f"whowillsee_{doc_id}_{persona_id}.pdf", lang)
 
 
 @app.get("/api/documents/{doc_id}/results/{persona_id}/export.html")
-def export_html(doc_id: str, persona_id: str):
+def export_html(doc_id: str, persona_id: str, lang: str = Lang):
     meta, result = _doc_meta(doc_id), _result(doc_id, persona_id)
-    return _html_response(meta, doc_id, result, f"whowillsee_{doc_id}_{persona_id}.html")
+    return _html_response(meta, doc_id, result, f"whowillsee_{doc_id}_{persona_id}.html", lang)
 
 
 @app.get("/api/documents/{doc_id}/audiences/{audience_id}/export.html")
-def export_audience_html(doc_id: str, audience_id: str):
-    meta, result = _doc_meta(doc_id), _audience_result(doc_id, audience_id)
-    return _html_response(meta, doc_id, result, f"whowillsee_{doc_id}_{audience_id}.html")
+def export_audience_html(doc_id: str, audience_id: str, lang: str = Lang):
+    meta, result = _doc_meta(doc_id), _audience_result(doc_id, audience_id, lang)
+    return _html_response(meta, doc_id, result, f"whowillsee_{doc_id}_{audience_id}.html", lang)
 
 
-def _html_response(meta: dict, doc_id: str, result: dict, name: str) -> HTMLResponse:
-    return HTMLResponse(report_html.render(meta, storage.doc_dir(doc_id), result),
+def _html_response(meta: dict, doc_id: str, result: dict, name: str, lang: str = "ko") -> HTMLResponse:
+    return HTMLResponse(report_html.render(meta, storage.doc_dir(doc_id), result, lang),
                         headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 

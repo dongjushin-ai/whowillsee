@@ -142,8 +142,9 @@ textarea { resize: vertical; }
 .empty h1 { font-size: 22px; margin-top: 0; }
 .empty li { margin-bottom: 8px; }
 
-.doc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
-.doc-title { font-size: 18px; font-weight: 700; word-break: break-all; }
+.doc-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.doc-head > div:first-child { flex: 1 1 240px; min-width: 200px; }
+.doc-title { font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
 .exports { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
 .exports a { text-decoration: none; color: inherit; }
 

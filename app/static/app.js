@@ -237,7 +237,7 @@ async function saveSettings(e) {
 // ------------------------------------------------------------------ 페르소나
 
 async function loadPersonas() {
-  state.personas = await api("/api/personas");
+  state.personas = await api(`/api/personas?lang=${I18N.lang}`);
   for (const id of [...state.selected]) {
     if (!state.personas.some((p) => p.id === id)) state.selected.delete(id);
   }
@@ -282,7 +282,7 @@ function currentAudience() {
 }
 
 async function loadAudiences() {
-  state.audiences = await api("/api/audiences");
+  state.audiences = await api(`/api/audiences?lang=${I18N.lang}`);
   if (state.audience && !currentAudience()) state.audience = null;
   renderAudiences();
 }
@@ -324,7 +324,7 @@ function openAudienceDialog(audience = null, duplicate = false) {
   state.editingAudience = audience && !duplicate ? audience.id : null;
   $("#audience-dialog-title").textContent = state.editingAudience ? "청중 그룹 수정" : duplicate ? "청중 그룹 복제" : "새 청중 그룹";
   $("#audience-delete").hidden = !state.editingAudience;
-  form.elements.name.value = audience ? (duplicate ? `${audience.name} (복사본)` : audience.name) : "";
+  form.elements.name.value = audience ? (duplicate ? tr(`${audience.name} (복사본)`) : audience.name) : "";
   form.elements.icon.value = audience?.icon || "👥";
   form.elements.context.value = audience?.context || "";
   const weights = Object.fromEntries((audience?.members || []).map((m) => [m.persona_id, m.weight]));
@@ -385,7 +385,7 @@ async function saveAudience(e) {
 
 async function deleteAudience() {
   const id = state.editingAudience;
-  if (!id || !confirm("이 청중 그룹을 삭제할까요?")) return;
+  if (!id || !confirm(tr("이 청중 그룹을 삭제할까요?"))) return;
   await api(`/api/audiences/${id}`, { method: "DELETE" });
   if (state.audience === id) state.audience = null;
   $("#audience-dialog").close();
@@ -404,7 +404,7 @@ function openPersonaDialog(persona = null, duplicate = false) {
     for (const [k, v] of Object.entries(persona)) {
       if (form.elements[k]) form.elements[k].value = v;
     }
-    if (duplicate) form.elements.name.value = `${persona.name} (복사본)`;
+    if (duplicate) form.elements.name.value = tr(`${persona.name} (복사본)`);
   }
   syncRangeOutputs();
   $("#persona-dialog").showModal();
@@ -422,7 +422,7 @@ async function autofillPersona() {
   msg.textContent = state.status?.mode === "ai" ? "AI가 페르소나를 구체화하는 중…" : "초안을 만드는 중…";
   try {
     const r = await api("/api/personas/generate", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ description: desc }),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ description: desc, lang: I18N.lang }),
     });
     const form = $("#persona-form");
     for (const [k, v] of Object.entries(r.persona)) {
@@ -467,7 +467,7 @@ async function savePersona(e) {
 }
 
 async function deletePersona(p) {
-  if (!confirm(`'${p.name}' 페르소나를 삭제할까요?`)) return;
+  if (!confirm(tr(`'${p.name}' 페르소나를 삭제할까요?`))) return;
   try {
     await api(`/api/personas/${p.id}`, { method: "DELETE" });
   } catch (err) {
@@ -514,7 +514,7 @@ async function sendDocument(fd, label) {
 }
 
 async function deleteDoc(d) {
-  if (!confirm(`'${d.filename}' 과 분석 결과를 삭제할까요?`)) return;
+  if (!confirm(tr(`'${d.filename}' 과 분석 결과를 삭제할까요?`))) return;
   await api(`/api/documents/${d.id}`, { method: "DELETE" });
   if (state.doc?.id === d.id) {
     state.doc = null;
@@ -528,7 +528,7 @@ async function deleteDoc(d) {
 async function openDoc(id, personaId = null, audienceId = null) {
   state.doc = await api(`/api/documents/${id}`);
   [state.results, state.docAudiences] = await Promise.all([
-    api(`/api/documents/${id}/results`), api(`/api/documents/${id}/audiences`)]);
+    api(`/api/documents/${id}/results`), api(`/api/documents/${id}/audiences?lang=${I18N.lang}`)]);
   $("#empty").hidden = true;
   $("#viewer").hidden = false;
   $("#analyze-btn").disabled = false;
@@ -567,7 +567,7 @@ async function openDoc(id, personaId = null, audienceId = null) {
 async function startAnalysis() {
   if (!state.doc) return;
   const body = { persona_ids: state.audience ? [] : [...state.selected], audience_id: state.audience || "",
-    context: $("#context-input").value };
+    context: $("#context-input").value, lang: I18N.lang };
   $("#analyze-btn").disabled = true;
   try {
     const job = await api(`/api/documents/${state.doc.id}/analyze`, {
@@ -711,7 +711,7 @@ async function uploadRecording(file) {
 }
 
 async function deleteRecording() {
-  if (!confirm("녹음 분석 결과를 지울까요? (받아쓴 대본은 남습니다)")) return;
+  if (!confirm(tr("녹음 분석 결과를 지울까요? (받아쓴 대본은 남습니다)"))) return;
   await api(`/api/documents/${state.doc.id}/recording`, { method: "DELETE" });
   state.doc = await api(`/api/documents/${state.doc.id}`);
   $("#script-dialog").close();
@@ -794,7 +794,7 @@ function renderVideo() {
 }
 
 async function deleteVideo() {
-  if (!confirm("영상 분석 결과(장면·지표)를 지울까요?")) return;
+  if (!confirm(tr("영상 분석 결과(장면·지표)를 지울까요?"))) return;
   await api(`/api/documents/${state.doc.id}/video`, { method: "DELETE" });
   state.doc = await api(`/api/documents/${state.doc.id}`);
   renderVideo();
@@ -894,7 +894,7 @@ function updateScriptButton() {
 async function openAudience(audienceId) {
   state.activeAudience = audienceId;
   state.activePersona = null;
-  state.result = await api(`/api/documents/${state.doc.id}/audiences/${audienceId}`);
+  state.result = await api(`/api/documents/${state.doc.id}/audiences/${audienceId}?lang=${I18N.lang}`);
   render();
 }
 
@@ -1069,9 +1069,9 @@ function renderExports() {
   const base = state.activeAudience ? `/api/documents/${state.doc.id}/audiences/${state.activeAudience}`
     : `/api/documents/${state.doc.id}/results/${state.activePersona}`;
   fill(box, 
-    el("a", { class: "btn", href: `${base}/export.pdf` }, "⬇ 주석 PDF"),
-    el("a", { class: "btn", href: `${base}/export.html`, title: "앱 없이 브라우저로 열어보는 공유용 파일" }, "⬇ 공유용 HTML"),
-    el("a", { class: "btn", href: `${base}/export.json` }, "⬇ JSON"),
+    el("a", { class: "btn", href: `${base}/export.pdf?lang=${I18N.lang}` }, "⬇ 주석 PDF"),
+    el("a", { class: "btn", href: `${base}/export.html?lang=${I18N.lang}`, title: "앱 없이 브라우저로 열어보는 공유용 파일" }, "⬇ 공유용 HTML"),
+    el("a", { class: "btn", href: `${base}/export.json?lang=${I18N.lang}` }, "⬇ JSON"),
   );
 }
 
@@ -1182,6 +1182,10 @@ function bind() {
 }
 
 (async function init() {
+  await loadI18n();
+  startI18nObserver();
+  $("#lang-select").value = I18N.lang;
+  $("#lang-select").addEventListener("change", (e) => setLang(e.target.value));
   bind();
   try {
     await Promise.all([loadStatus(), loadPersonas(), loadDocs()]);
@@ -1225,11 +1229,11 @@ async function loadDashboard() {
     fill(box, el("div", { class: "dash-empty" }, `불러오기 실패: ${err.message}`));
     return;
   }
-  const t = d.totals;
+  const tot = d.totals;
   const head = el("div", { class: "dash-head" },
     el("h1", {}, "대시보드"),
     el("span", { class: "muted" }, state.status?.mode === "ai" ? `분석 엔진: ${state.status.engine}` : "데모 모드 (AI 미연결)"));
-  if (!t.analyses) {
+  if (!tot.analyses) {
     fill(box, head, el("div", { class: "card dash-empty" },
       el("p", {}, "아직 분석한 자료가 없습니다."),
       el("a", { class: "btn primary", href: "#analyze" }, "자료 분석하러 가기")));
@@ -1238,9 +1242,9 @@ async function loadDashboard() {
   fill(box, 
     head,
     el("div", { class: "kpis" },
-      kpi("분석한 자료", t.documents, `분석 ${t.analyses}회`),
-      kpi("평균 전달력", t.avg_score, "100점 만점, 모든 청중 평균"),
-      kpi("발견한 지적", t.issues, null, ["critical", "warning", "suggestion"].map((s) => el("span", { class: `pill ${s}` }, `${SEV[s]} ${t[s]}`))),
+      kpi("분석한 자료", tot.documents, `분석 ${tot.analyses}회`),
+      kpi("평균 전달력", tot.avg_score, "100점 만점, 모든 청중 평균"),
+      kpi("발견한 지적", tot.issues, null, ["critical", "warning", "suggestion"].map((s) => el("span", { class: `pill ${s}` }, `${SEV[s]} ${tot[s]}`))),
       kpi("가장 어려워한 청중", d.personas[0] ? `${d.personas[0].icon} ${d.personas[0].avg_score}` : "–", d.personas[0]?.name || ""),
     ),
     el("div", { class: "dash-grid" },

@@ -11,6 +11,7 @@ from difflib import SequenceMatcher
 from pydantic import BaseModel, Field
 
 from . import storage
+from .messages import m as msg
 from .personas import get_persona
 
 SEV_RANK = {"critical": 0, "warning": 1, "suggestion": 2}
@@ -45,6 +46,20 @@ PRESETS = [
 ]
 
 
+PRESETS_EN = {
+    "town-hall": {"name": "Town hall meeting",
+                  "context": "A district town hall briefing. Residents of all ages watch on a screen, followed by Q&A."},
+    "exec-report": {"name": "Executive briefing",
+                    "context": "An executive meeting. You have 10 minutes to deliver the conclusion and the approval request."},
+}
+
+
+def localize(audience: "Audience", lang: str) -> "Audience":
+    if lang == "en" and audience.builtin and audience.id in PRESETS_EN:
+        return audience.model_copy(update=PRESETS_EN[audience.id])
+    return audience
+
+
 def _path():
     return storage.DATA_DIR / "audiences.json"
 
@@ -66,12 +81,12 @@ def _validate(data: AudienceIn) -> None:
         raise ValueError(f"없는 페르소나입니다: {', '.join(missing)}")
 
 
-def list_audiences() -> list[Audience]:
-    return PRESETS + _load_custom()
+def list_audiences(lang: str = "ko") -> list[Audience]:
+    return [localize(a, lang) for a in PRESETS] + _load_custom()
 
 
-def get_audience(audience_id: str) -> Audience | None:
-    return next((a for a in list_audiences() if a.id == audience_id), None)
+def get_audience(audience_id: str, lang: str = "ko") -> Audience | None:
+    return next((a for a in list_audiences(lang) if a.id == audience_id), None)
 
 
 def create_audience(data: AudienceIn) -> Audience:
@@ -128,7 +143,7 @@ def same_problem(a: dict, b: dict) -> bool:
     return a["category"] == b["category"] or SequenceMatcher(None, a["title"], b["title"]).ratio() >= 0.75
 
 
-def aggregate(audience: Audience, results: dict[str, dict]) -> dict:
+def aggregate(audience: Audience, results: dict[str, dict], lang: str = "ko") -> dict:
     """구성원별 결과(persona_id → result)를 결과와 같은 모양의 dict 로 합친다."""
     weights = {m.persona_id: m.weight for m in audience.members}
     present = [m for m in audience.members if m.persona_id in results]
@@ -180,17 +195,16 @@ def aggregate(audience: Audience, results: dict[str, dict]) -> dict:
                     "share": round(100 * m.weight / total_w), "score": results[m.persona_id]["overall"]["score"]}
                    for m in present]
     worst = min(member_rows, key=lambda r: r["score"]) if member_rows else None
-    summary = (f"구성원 {len(present)}명의 점수를 비율대로 합친 종합 점수입니다. "
-               f"여러 청중이 함께 지적한 문제가 {len(shared)}건 있습니다.")
+    summary = msg(lang, "aud.summary", count=len(present), shared=len(shared))
     if worst:
-        summary += f" 가장 어려워한 청중은 {worst['icon']} {worst['name']}({worst['score']}점, 비중 {worst['share']}%)입니다."
+        summary += msg(lang, "aud.worst", **worst)
     engines = {r.get("engine") for r in results.values()}
     return {
         "persona": {"id": f"aud:{audience.id}", "name": audience.name, "icon": audience.icon},
         "audience": {"id": audience.id, "name": audience.name, "icon": audience.icon, "members": member_rows,
                      "missing": [m.persona_id for m in audience.members if m.persona_id not in results]},
         "mode": "audience",
-        "engine": engines.pop() if len(engines) == 1 else "여러 엔진",
+        "engine": engines.pop() if len(engines) == 1 else msg(lang, "aud.engines"),
         "context": next((r.get("context") for r in results.values() if r.get("context")), ""),
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "overall": {
@@ -198,7 +212,7 @@ def aggregate(audience: Audience, results: dict[str, dict]) -> dict:
             "first_impression": "",
             "summary": summary,
             "strengths": [],
-            "top_fixes": [f"{c['rep']['title']} (청중 {c['share']}%)" for c in clusters[:5]],
+            "top_fixes": [msg(lang, "aud.fix", title=c["rep"]["title"], share=c["share"]) for c in clusters[:5]],
             "counts": counts,
             "timing": next((r["overall"].get("timing") for r in results.values() if r["overall"].get("timing")), None),
             # 영상 피드백은 페르소나별이라 비중이 가장 큰 구성원의 것을 보여준다

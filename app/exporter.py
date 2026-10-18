@@ -8,11 +8,12 @@ from pathlib import Path
 
 import pymupdf
 
+from .messages import category, m
+
 # 화면과 같은 심각도 단계: #9b1c1c, #d4483a, #eb9479
 RED = (0.608, 0.11, 0.11)
 COLORS = {"critical": RED, "warning": (0.831, 0.282, 0.227), "suggestion": (0.922, 0.58, 0.475)}
 WIDTHS = {"critical": 3.0, "warning": 2.2, "suggestion": 1.6}
-LABELS = {"critical": "치명", "warning": "주의", "suggestion": "제안"}
 NOTE_PAGE = (595, 842)  # A4 (pt)
 MARGIN = 48
 
@@ -36,6 +37,8 @@ class _Writer:
         if self.page is None:
             self.new_page()
         width = NOTE_PAGE[0] - 2 * MARGIN - indent
+        # 글꼴에 없는 글자(이모지 등)는 빈칸으로 찍히므로 뺀다
+        value = "".join(ch for ch in (value or "") if ch in "\n\t " or _FONT.has_glyph(ord(ch)))
         for line in _wrap(value, size, width):
             if self.y + size * 1.5 > NOTE_PAGE[1] - MARGIN:
                 self.new_page()
@@ -63,50 +66,56 @@ def _wrap(text: str, size: float, width: float) -> list[str]:
     return lines
 
 
-def annotated_pdf(meta: dict, doc_path: Path, result: dict) -> bytes:
+def annotated_pdf(meta: dict, doc_path: Path, result: dict, lang: str = "ko") -> bytes:
+    def t(key, **kw):
+        return m(lang, f"r.{key}", **kw)
+
+    def sev(s):
+        return t(f"sev.{s}")
+
     doc = pymupdf.open()
     persona = result["persona"]
     overall = result["overall"]
+    grey = (0.35, 0.35, 0.35)
 
     w = _Writer(doc)
-    w.text("WhoWillSee 검토 리포트", size=20, gap=10)
-    w.text(f"자료: {meta['filename']}", size=10, color=(0.35, 0.35, 0.35), gap=2)
-    w.text(f"페르소나: {persona.get('icon', '')} {persona['name']}", size=10, color=(0.35, 0.35, 0.35), gap=2)
-    mode = result.get("engine") or "데모 모드(규칙 기반)"
-    w.text(f"분석: {mode} · {result['created_at']}", size=10, color=(0.35, 0.35, 0.35), gap=14)
+    w.text(t("title"), size=20, gap=10)
+    w.text(t("doc", name=meta["filename"]), size=10, color=grey, gap=2)
+    w.text(t("persona", name=f"{persona.get('icon', '')} {persona['name']}"), size=10, color=grey, gap=2)
+    w.text(t("engine", engine=result.get("engine") or t("demo"), at=result["created_at"]), size=10, color=grey, gap=14)
     c = overall["counts"]
-    w.text(f"전달력 점수 {overall['score']} / 100   ·   치명 {c['critical']} · 주의 {c['warning']} · 제안 {c['suggestion']}",
+    w.text(t("scoreline", score=overall["score"], c=c["critical"], w=c["warning"], s=c["suggestion"]),
            size=13, color=RED, gap=12)
     timing = overall.get("timing")
     if timing:
-        target = f" / 목표 {timing['target_minutes']:g}분" if timing.get("target_minutes") else ""
-        kind = "실제" if timing.get("measured") else "예상"
-        basis = "녹음 기준" if timing.get("measured") else "대본 기준"
-        w.text(f"{kind} 발표 시간 {timing['est_minutes']:g}분{target} ({basis})", size=11, gap=4 if overall.get("delivery") else 10)
+        target = t("timing.target", target=f"{timing['target_minutes']:g}") if timing.get("target_minutes") else ""
+        line = t("timing.measured" if timing.get("measured") else "timing.est", est=f"{timing['est_minutes']:g}", target=target)
+        w.text(line, size=11, gap=4 if overall.get("delivery") else 10)
     delivery = overall.get("delivery")
     if delivery:
-        rate = f"말 속도 {delivery['rate']}자/분 · " if delivery.get("rate") else ""
-        w.text(f"{rate}말버릇 {delivery['filler_total']}회 · 긴 멈춤 {delivery['long_pauses']}회 (녹음 '{delivery.get('filename', '')}')",
-               size=10, color=(0.35, 0.35, 0.35), gap=10)
+        rate = t("delivery.rate", rate=delivery["rate"]) if delivery.get("rate") else ""
+        w.text(t("delivery.line", rate=rate, fillers=delivery["filler_total"], top="", pauses=delivery["long_pauses"])
+               + t("delivery.file", name=delivery.get("filename", "")), size=10, color=grey, gap=10)
     vid = overall.get("video")
     if vid:
         from .report_html import video_line
 
-        w.text("발표 모습 (영상)", size=12, gap=2)
-        w.text(video_line(vid) + " (정면 얼굴 검출 기반의 대략적 추정)", size=10, color=(0.35, 0.35, 0.35), gap=4)
+        w.text(t("video_pdf"), size=12, gap=2)
+        w.text(video_line(vid, lang) + " " + t("video.note"), size=10, color=grey, gap=4)
         for f in vid.get("feedback", []):
-            w.text(f"{f['n']}  [{LABELS[f['severity']]}·{f['category']}·{f['at_seconds']:.0f}초]  {f['title']}",
+            at = t("seconds", n=f"{f['at_seconds']:.0f}")
+            w.text(f"{f['n']}  [{sev(f['severity'])}·{category(lang, f['category'])}·{at}]  {f['title']}",
                    size=11, color=COLORS[f["severity"]], gap=2)
-            w.text(f"왜 문제인가: {f['reason']}\n이렇게 고치세요: {f['suggestion']}", indent=10, gap=6)
+            w.text(f"{t('why')}: {f['reason']}\n{t('fix')}: {f['suggestion']}", indent=10, gap=6)
         w.y += 6
     if result.get("context"):
-        w.text("자료 사용 상황", size=12, gap=2)
+        w.text(t("context"), size=12, gap=2)
         w.text(result["context"], gap=10)
-    for title, body in (("첫인상", overall.get("first_impression")), ("종합 평가", overall.get("summary"))):
+    for title, body in ((t("first"), overall.get("first_impression")), (t("summary"), overall.get("summary"))):
         if body:
             w.text(title, size=12, gap=2)
             w.text(body, gap=10)
-    for title, items in (("잘된 점", overall.get("strengths")), ("우선 고칠 것", overall.get("top_fixes"))):
+    for title, items in ((t("strengths"), overall.get("strengths")), (t("fixes"), overall.get("top_fixes"))):
         if items:
             w.text(title, size=12, gap=2)
             for i, item in enumerate(items, 1):
@@ -130,8 +139,8 @@ def annotated_pdf(meta: dict, doc_path: Path, result: dict) -> bytes:
             annot = page.add_rect_annot(rect)
             annot.set_colors(stroke=color)
             annot.set_border(width=WIDTHS[issue["severity"]], dashes=[4, 2] if issue["severity"] == "suggestion" else None)
-            annot.set_info(title=f"#{issue['n']} {LABELS[issue['severity']]} · {persona['name']}",
-                           content=_memo(issue))
+            annot.set_info(title=f"#{issue['n']} {sev(issue['severity'])} · {persona['name']}",
+                           content=_memo(issue, lang))
             annot.update()
             key = tuple(round(issue["box"][k], 2) for k in ("x", "y", "w", "h"))
             same_box[key] = same_box.get(key, -1) + 1
@@ -139,27 +148,27 @@ def annotated_pdf(meta: dict, doc_path: Path, result: dict) -> bytes:
                    text_color=(0.04, 0.04, 0.04) if issue["severity"] == "suggestion" else (1, 1, 1))
         if rpage["issues"]:
             w.new_page()
-            w.text(f"페이지 {rpage['page']} 메모", size=15, gap=8)
+            w.text(t("page_notes", n=rpage["page"]), size=15, gap=8)
             if rpage.get("page_comment"):
-                w.text(rpage["page_comment"], color=(0.35, 0.35, 0.35), gap=10)
+                w.text(rpage["page_comment"], color=grey, gap=10)
             for issue in rpage["issues"]:
-                where = "[대본] " if issue.get("target") == "script" else ""
-                w.text(f"#{issue['n']}  {where}[{LABELS[issue['severity']]}·{issue['category']}]  {issue['title']}",
+                where = t("script_tag_pdf") if issue.get("target") == "script" else ""
+                w.text(f"#{issue['n']}  {where}[{sev(issue['severity'])}·{category(lang, issue['category'])}]  {issue['title']}",
                        size=11.5, color=COLORS[issue["severity"]], gap=2)
-                w.text(_memo(issue), indent=10, gap=10)
+                w.text(_memo(issue, lang), indent=10, gap=10)
     return doc.tobytes(garbage=3, deflate=True)
 
 
-def _memo(issue: dict) -> str:
+def _memo(issue: dict, lang: str = "ko") -> str:
     parts = []
     if issue.get("voices"):
         who = ", ".join(f"{v['name']}({v['weight']})" for v in issue["voices"])
-        parts.append(f"지적한 청중 (비중 {issue['share']}%): {who}")
-    parts.append(f"왜 문제인가: {issue['reason']}")
+        parts.append(m(lang, "r.share_pdf", share=issue["share"], names=who))
+    parts.append(f"{m(lang, 'r.why')}: {issue['reason']}")
     if issue.get("suggestion"):
-        parts.append(f"이렇게 고치세요: {issue['suggestion']}")
+        parts.append(f"{m(lang, 'r.fix')}: {issue['suggestion']}")
     if issue.get("persona_reaction"):
-        parts.append(f"속마음: “{issue['persona_reaction']}”")
+        parts.append(f"{m(lang, 'r.reaction')}: “{issue['persona_reaction']}”")
     return "\n".join(parts)
 
 

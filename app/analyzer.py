@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import providers, recording, video
+from .messages import m, norm_lang
 from . import script as scripts
 from .personas import Persona
 
@@ -34,9 +35,10 @@ class AnalysisError(Exception):
 # ====================================================================== 공통
 
 def analyze(doc: dict, doc_path: Path, persona: Persona, context: str = "",
-            progress: ProgressFn | None = None) -> dict:
+            progress: ProgressFn | None = None, lang: str = "ko") -> dict:
     """문서 메타(doc)와 페르소나로 분석 결과 dict 를 만든다."""
     progress = progress or (lambda done, total: None)
+    lang = norm_lang(lang)
     pages = doc["pages"]
     script = doc.get("script")
     delivery = recording.delivery_summary(doc.get("recording"))
@@ -46,15 +48,16 @@ def analyze(doc: dict, doc_path: Path, persona: Persona, context: str = "",
     except providers.ProviderError as exc:
         raise AnalysisError(str(exc)) from exc
     if provider:
-        raw = _analyze_with_ai(provider, pages, doc_path, persona, context, progress, script, delivery)
+        raw = _analyze_with_ai(provider, pages, doc_path, persona, context, progress, script, delivery, lang)
         mode, engine = "ai", provider.engine
-        feedback = _video_review_ai(provider, persona, context, vsum, doc_path) if vsum else []
+        feedback = _video_review_ai(provider, persona, context, vsum, doc_path, lang) if vsum else []
     else:
-        raw, mode, engine = _analyze_demo(pages, persona, script, doc.get("recording")), "demo", None
-        feedback = _video_review_demo(vsum, persona) if vsum else []
+        raw, mode, engine = _analyze_demo(pages, persona, script, doc.get("recording"), lang), "demo", None
+        feedback = _video_review_demo(vsum, persona, lang) if vsum else []
         progress(1, 1)
     timing = scripts.timing(script, [p["index"] for p in pages])
     result = finalize(raw, pages, persona, mode, engine, context, timing, delivery)
+    result["lang"] = lang
     if vsum:
         result["overall"]["video"] = {**vsum, "feedback": _normalize_feedback(feedback)}
     return result
@@ -305,14 +308,16 @@ def _intro(persona: Persona, context: str, page_nums: list[int], total: int, tim
 
 
 def _analyze_with_ai(client, pages: list[dict], doc_path: Path, persona: Persona, context: str,
-                     progress: ProgressFn, script: dict | None = None, delivery: dict | None = None) -> dict:
+                     progress: ProgressFn, script: dict | None = None, delivery: dict | None = None,
+                     lang: str = "ko") -> dict:
     batches = [pages[i:i + PAGES_PER_CALL] for i in range(0, len(pages), PAGES_PER_CALL)]
     timing = scripts.timing(script, [p["index"] for p in pages])
     total_steps = len(batches) + (1 if len(batches) > 1 else 0)
     merged_pages, overalls = [], []
     for done, batch in enumerate(batches):
         progress(done, total_steps)
-        content = [{"type": "text", "text": _intro(persona, context, [p["index"] for p in batch], len(pages), timing, delivery)}]
+        intro = _intro(persona, context, [p["index"] for p in batch], len(pages), timing, delivery)
+        content = [{"type": "text", "text": intro + "\n\n" + m(lang, "ai.output_language")}]
         for page in batch:
             content += _page_content(page, doc_path, scripts.page_text(script, page["index"]))
         result = _call(client, content, RESULT_SCHEMA)
@@ -320,14 +325,15 @@ def _analyze_with_ai(client, pages: list[dict], doc_path: Path, persona: Persona
         overalls.append(result.get("overall", {}))
     if len(batches) > 1:
         progress(len(batches), total_steps)
-        overall = _synthesize(client, persona, context, merged_pages, overalls)
+        overall = _synthesize(client, persona, context, merged_pages, overalls, lang)
     else:
         overall = overalls[0]
     progress(total_steps, total_steps)
     return {"overall": overall, "pages": merged_pages}
 
 
-def _synthesize(client, persona: Persona, context: str, pages: list[dict], overalls: list[dict]) -> dict:
+def _synthesize(client, persona: Persona, context: str, pages: list[dict], overalls: list[dict],
+                lang: str = "ko") -> dict:
     """여러 묶음으로 나눠 분석한 경우 종합 평가를 한 번 더 만든다 (텍스트만 사용)."""
     digest = {
         "partial_overalls": overalls,
@@ -339,7 +345,7 @@ def _synthesize(client, persona: Persona, context: str, pages: list[dict], overa
         "## 자료 사용 상황", context or "(입력 없음)",
         "## 부분 분석 결과",
         json.dumps(digest, ensure_ascii=False),
-        "", "위 부분 결과를 바탕으로 자료 전체에 대한 overall 을 작성하세요.",
+        "", "위 부분 결과를 바탕으로 자료 전체에 대한 overall 을 작성하세요.", m(lang, "ai.output_language"),
     ])}]
     return _call(client, content, OVERALL_SCHEMA, max_tokens=8000)
 
@@ -377,14 +383,15 @@ def _video_metrics_text(v: dict) -> str:
     ])
 
 
-def _video_review_ai(provider, persona: Persona, context: str, v: dict, doc_path: Path) -> list[dict]:
+def _video_review_ai(provider, persona: Persona, context: str, v: dict, doc_path: Path,
+                     lang: str = "ko") -> list[dict]:
     content = [{"type": "text", "text": "\n".join([
         "## 페르소나", persona.to_prompt(),
         *(["## 자료 사용 상황", context] if context.strip() else []),
         "## 발표 영상 지표 (자동 측정)", _video_metrics_text(v),
         "", "아래는 발표 영상의 대표 장면입니다. 이 페르소나가 이 발표를 직접 본다면 발표자의 시선, 표정, 자세, 손동작,"
             " 화면 구성(조명·거리·배경)에서 무엇이 신경 쓰일지 지적하세요. 잘하는 점은 지적으로 만들지 마세요."
-            " at_seconds 는 그 문제가 잘 보이는 장면의 시간(초)입니다. 최대 6개.",
+            " at_seconds 는 그 문제가 잘 보이는 장면의 시간(초)입니다. 최대 6개.", m(lang, "ai.output_language"),
     ])}]
     for k in v.get("keyframes", []):
         path = doc_path / "video" / k["image"]
@@ -398,41 +405,29 @@ def _video_review_ai(provider, persona: Persona, context: str, v: dict, doc_path
         raise AnalysisError(f"영상 평가 중 오류: {exc}") from exc
 
 
-def _video_review_demo(v: dict, persona: Persona) -> list[dict]:
+def _video_review_demo(v: dict, persona: Persona, lang: str = "ko") -> list[dict]:
     out = []
 
-    def add(severity, category, title, reason, suggestion, reaction, at=0.0):
-        out.append({"severity": severity, "category": category, "title": title, "reason": reason,
-                    "suggestion": suggestion, "persona_reaction": reaction, "at_seconds": at})
+    def add(key, severity, category, at=0.0, **reason):
+        out.append({"severity": severity, "category": category, "title": m(lang, f"{key}.title"),
+                    "reason": m(lang, f"{key}.reason", **reason), "suggestion": m(lang, f"{key}.suggestion"),
+                    "persona_reaction": m(lang, f"{key}.reaction"), "at_seconds": at})
 
     fr = v["frontal_ratio"]
     if fr < 0.5:
-        add("critical" if fr < 0.3 else "warning", "시선", "청중을 보는 시간이 짧습니다",
-            f"정면 얼굴이 보인 장면이 {fr * 100:.0f}%뿐입니다. 화면이나 원고만 보면 {persona.name}은(는) "
-            "자기에게 말하지 않는다고 느낍니다.",
-            "문장의 끝은 청중(카메라)을 보며 말하세요. 원고는 키워드만 적어 두고 슬쩍 확인하세요.",
-            "나한테 말하는 게 아니네.", v.get("longest_away_at") or 0.0)
+        add("vid.gaze", "critical" if fr < 0.3 else "warning", "시선", v.get("longest_away_at") or 0.0,
+            pct=f"{fr * 100:.0f}", persona=persona.name)
     elif v["longest_away_seconds"] >= 20:
-        add("warning", "시선", "한동안 청중을 보지 않는 구간이 있습니다",
-            f"{v['longest_away_at']:.0f}초부터 약 {v['longest_away_seconds']:.0f}초 동안 정면을 보지 않았습니다.",
-            "슬라이드를 설명할 때도 한 문장마다 청중을 한 번씩 보세요.", "어디 보고 얘기하는 거지?",
-            v.get("longest_away_at") or 0.0)
+        add("vid.away", "warning", "시선", v.get("longest_away_at") or 0.0,
+            at=f"{v['longest_away_at']:.0f}", seconds=f"{v['longest_away_seconds']:.0f}")
     if v["visible_ratio"] < 0.7:
-        add("warning", "화면구성", "화면 밖으로 자주 벗어납니다",
-            f"얼굴이 화면 안에 있는 장면이 {v['visible_ratio'] * 100:.0f}%입니다.",
-            "카메라를 조금 뒤로 빼거나, 움직이는 범위를 정해 두세요.", "어, 어디 갔지?", v.get("first_away_at") or 0.0)
+        add("vid.offscreen", "warning", "화면구성", v.get("first_away_at") or 0.0, pct=f"{v['visible_ratio'] * 100:.0f}")
     if v.get("face_size") is not None and v["face_size"] < 0.08:
-        add("suggestion", "화면구성", "발표자가 너무 작게 보입니다",
-            "얼굴이 화면 높이의 8%도 안 돼 표정이 전달되지 않습니다.",
-            "카메라를 가까이 두거나 확대해 상반신이 보이게 찍으세요.", "표정이 하나도 안 보여.")
+        add("vid.small", "suggestion", "화면구성")
     if v["brightness"] < 0.3:
-        add("warning", "화면구성", "조명이 어둡습니다",
-            f"평균 밝기가 {v['brightness']:.2f}로 어두워 표정이 잘 보이지 않습니다.",
-            "얼굴 앞쪽(창문이나 조명 쪽)을 향해 서세요. 뒤에서 빛이 오면 얼굴이 어두워집니다.", "얼굴이 어둡네.")
+        add("vid.dark", "warning", "화면구성", value=f"{v['brightness']:.2f}")
     if v["movement"] > 0.15:
-        add("suggestion", "자세", "좌우로 많이 움직입니다",
-            "발표 중 좌우 위치 변화가 커서 산만해 보일 수 있습니다.",
-            "중요한 말을 할 때는 멈춰 서서 말하고, 이동은 페이지를 넘길 때만 하세요.", "왔다 갔다 하니까 정신없어.")
+        add("vid.move", "suggestion", "자세")
     return out
 
 
@@ -465,84 +460,60 @@ ACRONYM = re.compile(r"\b[A-Z][A-Za-z0-9/+-]*[A-Z0-9]\b")
 NUMBER = re.compile(r"\d[\d,.]*\s*%?")
 
 
-def _analyze_demo(pages: list[dict], persona: Persona, script: dict | None = None, rec: dict | None = None) -> dict:
+def _analyze_demo(pages: list[dict], persona: Persona, script: dict | None = None, rec: dict | None = None,
+                  lang: str = "ko") -> dict:
     lay = persona.expertise_level <= 2
     mid = persona.expertise_level <= 3
-    elderly = persona.digital_literacy <= 1 or "70" in persona.age_group or "고령" in persona.name
+    elderly = persona.digital_literacy <= 1 or "70" in persona.age_group or "고령" in persona.name \
+        or persona.id == "senior-citizen"
     small_limit = 14 if elderly else 10
+    who = persona.name
     out_pages, penalty = [], 0
     for page in pages:
         issues = []
         blocks = page.get("blocks") or []
         if not blocks:
-            issues.append(_demo_issue([], "suggestion", "기타", "이미지 내용은 데모 모드에서 분석되지 않습니다",
-                                      "데모 모드는 추출된 텍스트만 검사합니다. AI를 연결하면 그림·차트까지 분석합니다.",
-                                      "상단 'AI 연결'에서 내 AI를 연결하고 다시 분석하세요.", "이 그림은 무슨 뜻이지?",
-                                      bbox={"x": 0, "y": 0, "w": 1, "h": 1}))
+            issues.append(_demo("demo.image", lang, [], "suggestion", "기타", bbox={"x": 0, "y": 0, "w": 1, "h": 1}))
         # 아주 작은 글씨(각주 등)는 블록별로, 조금 작은 글씨는 페이지당 하나로 묶어 지적한다
         smallish = [b for b in blocks if b.get("font_size") and 10 <= b["font_size"] < small_limit]
         if smallish:
             sizes = sorted({b["font_size"] for b in smallish})
-            issues.append(_demo_issue([b["id"] for b in smallish], "warning", "가독성",
-                                      "전반적으로 글자가 작습니다",
-                                      f"글자 크기 {sizes[0]}~{sizes[-1]} 인 텍스트가 {len(smallish)}곳 있어 "
-                                      f"{persona.name}에게는 읽기 버겁습니다.",
-                                      f"본문은 {small_limit + 4} 이상으로 키우고, 표는 핵심 수치만 남기세요.",
-                                      "눈이 침침해서 잘 안 보이네."))
+            issues.append(_demo("demo.smallish", lang, [b["id"] for b in smallish], "warning", "가독성",
+                                reason=dict(lo=sizes[0], hi=sizes[-1], count=len(smallish), persona=who),
+                                suggestion=dict(size=small_limit + 4)))
         for b in blocks:
             text = b["text"]
             if b.get("font_size") and b["font_size"] < 10:
-                issues.append(_demo_issue([b["id"]], "critical" if elderly else "warning", "가독성",
-                                          "글자가 너무 작습니다",
-                                          f"글자 크기 {b['font_size']}로, {persona.name}에게는 읽기 어렵습니다. "
-                                          "중요한 조건이나 연락처가 작은 글씨에 숨어 있으면 신뢰도 떨어집니다.",
-                                          f"최소 {small_limit + 4} 이상으로 키우고 본문과 같은 색 대비를 쓰세요.",
-                                          "작아서 안 보이는데… 일부러 숨긴 건가?"))
+                issues.append(_demo("demo.small", lang, [b["id"]], "critical" if elderly else "warning", "가독성",
+                                    reason=dict(size=b["font_size"], persona=who), suggestion=dict(size=small_limit + 4)))
             words = [w for w in JARGON if w.lower() in text.lower()]
             acronyms = sorted(set(ACRONYM.findall(text)))
             if mid and (len(words) + len(acronyms)) >= 2:
-                found = ", ".join((words + acronyms)[:6])
-                issues.append(_demo_issue([b["id"]], "critical" if lay else "warning", "용어",
-                                          "전문용어·약어가 많습니다",
-                                          f"'{found}' 같은 표현은 {persona.name}의 전문성 수준"
-                                          f"({persona.expertise_level}/5)에서 이해하기 어렵습니다.",
-                                          "쉬운 우리말로 바꾸고, 꼭 필요한 용어는 괄호로 한 줄 설명을 붙이세요.",
-                                          "무슨 말인지 하나도 모르겠네."))
+                issues.append(_demo("demo.jargon", lang, [b["id"]], "critical" if lay else "warning", "용어",
+                                    reason=dict(found=", ".join((words + acronyms)[:6]), persona=who,
+                                                level=persona.expertise_level)))
             if mid and len(text) > 160:
-                issues.append(_demo_issue([b["id"]], "warning", "정보과밀", "한 덩어리에 정보가 너무 많습니다",
-                                          f"{len(text)}자가 한 블록에 몰려 있어 훑어보는 사람은 핵심을 놓칩니다.",
-                                          "핵심 한 문장 + 3개 이하의 짧은 항목으로 나누세요.",
-                                          "길어서 안 읽을래."))
+                issues.append(_demo("demo.dense", lang, [b["id"]], "warning", "정보과밀", reason=dict(chars=len(text))))
             if MISSING.search(text):
-                issues.append(_demo_issue([b["id"]], "critical" if lay else "warning", "누락정보",
-                                          "정보가 비어 있거나 다른 곳으로 미뤄져 있습니다",
-                                          f"'{MISSING.search(text).group(0)}' 표현이 있어 꼭 필요한 정보"
-                                          "(일정·방법·근거·연락처)를 이 자료만으로 알 수 없습니다.",
-                                          "확정된 내용만 적고, 미정이면 언제 어디서 알 수 있는지 명시하세요.",
-                                          "그래서 언제, 어떻게 하라는 거야?"))
+                issues.append(_demo("demo.missing", lang, [b["id"]], "critical" if lay else "warning", "누락정보",
+                                    reason=dict(word=MISSING.search(text).group(0))))
             nums = NUMBER.findall(text)
             if lay and len(nums) >= 4:
-                issues.append(_demo_issue([b["id"]], "warning", "정보과밀", "숫자가 한꺼번에 너무 많습니다",
-                                          f"숫자 {len(nums)}개가 나열되어 무엇이 중요한지 알기 어렵습니다.",
-                                          "가장 중요한 숫자 하나를 크게 보여주고 생활 속 의미로 풀어 쓰세요 (예: '1인당 연 3만 원 절약').",
-                                          "숫자만 잔뜩이네."))
+                issues.append(_demo("demo.numbers", lang, [b["id"]], "warning", "정보과밀", reason=dict(count=len(nums))))
         weights = {"critical": 12, "warning": 6, "suggestion": 2}
         penalty += sum(weights[i["severity"]] for i in issues)
-        issues += _demo_script_issues(scripts.page_text(script, page["index"]), persona, lay, mid)
+        issues += _demo_script_issues(scripts.page_text(script, page["index"]), persona, lay, mid, lang)
         issues.sort(key=lambda i: SEVERITIES.index(i["severity"]))
         out_pages.append({"page": page["index"], "page_comment": "", "issues": issues[:8]})
     timing = scripts.timing(script, [p["index"] for p in pages])
     if timing and timing["over"]:
         longest = max(timing["per_page"], key=lambda p: p["chars"])
         page_out = next(p for p in out_pages if p["page"] == longest["page"])
-        page_out["issues"].insert(0, _demo_issue(
-            [], "warning", "논리·구성", "발표 시간이 목표보다 깁니다",
-            f"대본 기준 예상 {timing['est_minutes']}분으로 목표 {timing['target_minutes']}분을 넘습니다. "
-            f"이 페이지가 가장 깁니다(약 {longest['minutes']}분).",
-            "페르소나에게 꼭 필요한 내용만 남기고 배경 설명은 질의응답이나 자료로 돌리세요.",
-            "언제 끝나지…", target="script"))
+        page_out["issues"].insert(0, _demo("script.over", lang, [], "warning", "논리·구성", target="script",
+                                           reason=dict(est=timing["est_minutes"], target=timing["target_minutes"],
+                                                       page_minutes=longest["minutes"])))
         penalty += 6
-    for page_no, issue in _demo_delivery_issues(rec, persona):
+    for page_no, issue in _demo_delivery_issues(rec, persona, lang):
         target = next((p for p in out_pages if p["page"] == page_no), None)
         if target:
             target["issues"].append(issue)
@@ -551,87 +522,74 @@ def _analyze_demo(pages: list[dict], persona: Persona, script: dict | None = Non
     return {
         "overall": {
             "score": score,
-            "first_impression": "(데모 모드) 텍스트 규칙만으로 추정한 결과입니다.",
-            "summary": f"{persona.name} 관점에서 용어·글자 크기·정보 밀도·누락 정보를 규칙 기반으로 점검했습니다. "
-                       "실제 페르소나 시뮬레이션은 상단 'AI 연결'에서 내 AI를 연결하면 동작합니다.",
+            "first_impression": m(lang, "demo.overall.first"),
+            "summary": m(lang, "demo.overall.summary", persona=who),
             "strengths": [],
-            "top_fixes": ["전문용어를 쉬운 말로 바꾸기", "작은 글씨 키우기", "미정·별첨 정보 채우기"],
+            "top_fixes": [m(lang, f"demo.overall.fix{i}") for i in (1, 2, 3)],
         },
         "pages": out_pages,
     }
 
 
-def _demo_delivery_issues(rec: dict | None, persona: Persona) -> list[tuple[int, dict]]:
+def _demo_delivery_issues(rec: dict | None, persona: Persona, lang: str = "ko") -> list[tuple[int, dict]]:
     """녹음 지표(말 속도·말버릇·긴 멈춤)에 대한 규칙 기반 지적. (페이지, 지적) 목록."""
     if not rec:
         return []
-    m = rec["metrics"]
-    pages = [p for p in m["per_page"] if p["seconds"] > 0] or m["per_page"]
+    mt = rec["metrics"]
+    pages = [p for p in mt["per_page"] if p["seconds"] > 0] or mt["per_page"]
     out = []
     fast_limit = 340 if persona.expertise_level <= 2 or persona.digital_literacy <= 1 else 400
     timed = [p for p in pages if p.get("rate")]
-    if m.get("rate") and m["rate"] > fast_limit and timed:
+    if mt.get("rate") and mt["rate"] > fast_limit and timed:
         fastest = max(timed, key=lambda p: p["rate"])
-        out.append((fastest["page"], _demo_issue(
-            [], "warning", "가독성", "말이 너무 빠릅니다",
-            f"평균 {m['rate']}자/분(이 페이지 {fastest['rate']}자/분)으로, {persona.name}이(가) 따라가기 어렵습니다 "
-            "(보통 300~350자/분).", "핵심 문장 앞뒤로 한 박자 쉬고, 숫자는 천천히 또박또박 말하세요.",
-            "너무 빨라서 놓쳤어.", target="script")))
-    elif m.get("rate") and m["rate"] < 220 and timed:
-        out.append((timed[0]["page"], _demo_issue(
-            [], "suggestion", "톤·표현", "말이 다소 느립니다",
-            f"평균 {m['rate']}자/분으로 느린 편이라 집중이 흐트러질 수 있습니다.",
-            "준비한 내용을 줄이고 말의 속도를 조금 올려 보세요.", "언제 본론이 나오지?", target="script")))
-    per_min = m.get("fillers_per_minute") or 0
+        out.append((fastest["page"], _demo("rec.fast", lang, [], "warning", "가독성", target="script",
+                                           reason=dict(rate=mt["rate"], page_rate=fastest["rate"], persona=persona.name))))
+    elif mt.get("rate") and mt["rate"] < 220 and timed:
+        out.append((timed[0]["page"], _demo("rec.slow", lang, [], "suggestion", "톤·표현", target="script",
+                                            reason=dict(rate=mt["rate"]))))
+    per_min = mt.get("fillers_per_minute") or 0
     if per_min >= 3:
         worst = max(pages, key=lambda p: p["fillers"])
-        top = ", ".join(f"'{k}' {v}회" for k, v in list(m["fillers"].items())[:3])
-        out.append((worst["page"], _demo_issue(
-            [], "warning" if per_min >= 6 else "suggestion", "톤·표현", "말버릇이 자주 나옵니다",
-            f"분당 {per_min}회({top}). 말버릇이 잦으면 준비가 덜 된 인상을 주고 신뢰가 떨어집니다.",
-            "말버릇이 나올 자리에서는 잠깐 멈추세요. 침묵이 '음…'보다 훨씬 자신감 있게 들립니다.",
-            "자꾸 '이제'라고 하네…", target="script")))
-    pauses = m.get("long_pauses") or []
+        top = ", ".join(m(lang, "rec.filler.item", word=k, count=v) for k, v in list(mt["fillers"].items())[:3])
+        out.append((worst["page"], _demo("rec.filler", lang, [], "warning" if per_min >= 6 else "suggestion", "톤·표현",
+                                         target="script", reason=dict(per_min=per_min, top=top))))
+    pauses = mt.get("long_pauses") or []
     if len(pauses) >= 3:
-        out.append((pages[0]["page"], _demo_issue(
-            [], "suggestion", "논리·구성", "긴 멈춤이 여러 번 있습니다",
-            f"2.5초가 넘는 멈춤이 {len(pauses)}번 있습니다 (예: {pauses[0]['at']:.0f}초 지점 {pauses[0]['seconds']}초).",
-            "페이지를 넘길 때 할 연결 문장을 미리 정해 두세요 (예: '그럼 비용은 얼마일까요?').",
-            "끝났나?", target="script")))
+        out.append((pages[0]["page"], _demo("rec.pause", lang, [], "suggestion", "논리·구성", target="script",
+                                            reason=dict(count=len(pauses), at=f"{pauses[0]['at']:.0f}",
+                                                        seconds=pauses[0]["seconds"]))))
     return out
 
 
-def _demo_script_issues(text: str, persona: Persona, lay: bool, mid: bool) -> list[dict]:
+def _demo_script_issues(text: str, persona: Persona, lay: bool, mid: bool, lang: str = "ko") -> list[dict]:
     """대본(귀로 듣는 말)에 대한 규칙 기반 지적."""
     if not text:
         return []
     out = []
     long = scripts.long_sentences(text)
     if long:
-        sample = long[0][:40] + "…"
-        out.append(_demo_issue([], "warning", "가독성", "말로 듣기엔 문장이 너무 깁니다",
-                               f"'{sample}' 처럼 한 문장이 길면 {persona.name}은(는) 듣다가 앞부분을 놓칩니다 "
-                               f"(긴 문장 {len(long)}개).",
-                               "한 문장에 한 가지 내용만 담아 두세 문장으로 끊어 말하세요.",
-                               "그래서 결론이 뭐라고?", target="script"))
+        out.append(_demo("script.long", lang, [], "warning", "가독성", target="script",
+                         reason=dict(sample=long[0][:40] + "…", persona=persona.name, count=len(long))))
     words = [w for w in JARGON if w.lower() in text.lower()]
     acronyms = sorted(set(ACRONYM.findall(text)))
     if mid and len(words) + len(acronyms) >= 2:
-        found = ", ".join((words + acronyms)[:6])
-        out.append(_demo_issue([], "critical" if lay else "warning", "용어", "대본에 귀로 듣기 어려운 용어가 많습니다",
-                               f"'{found}' 같은 말은 화면보다 귀로 들을 때 더 알아듣기 어렵습니다.",
-                               "쉬운 말로 바꿔 말하고, 꼭 써야 하는 용어는 '쉽게 말해 ~입니다'로 풀어 주세요.",
-                               "방금 뭐라고 한 거지?", target="script"))
+        out.append(_demo("script.jargon", lang, [], "critical" if lay else "warning", "용어", target="script",
+                         reason=dict(found=", ".join((words + acronyms)[:6]))))
     if MISSING.search(text):
-        out.append(_demo_issue([], "warning", "누락정보", "말로도 정보를 미루고 있습니다",
-                               f"'{MISSING.search(text).group(0)}' 라고 말하면 듣는 사람은 지금 무엇을 해야 할지 모릅니다.",
-                               "정해진 것과 언제 알려줄지를 구체적으로 말하세요 (예: '3월 중 문자로 안내합니다').",
-                               "그럼 오늘 왜 들으러 온 거지?", target="script"))
+        out.append(_demo("script.missing", lang, [], "warning", "누락정보", target="script",
+                         reason=dict(word=MISSING.search(text).group(0))))
     return out
 
 
 def _demo_issue(block_ids, severity, category, title, reason, suggestion, reaction, bbox=None, target="slide") -> dict:
     return {"block_ids": block_ids, "bbox": bbox or {"x": 0, "y": 0, "w": 0, "h": 0}, "target": target,
-            "severity": severity,
-            "category": category, "title": title, "reason": reason, "suggestion": suggestion,
+            "severity": severity, "category": category, "title": title, "reason": reason, "suggestion": suggestion,
             "persona_reaction": reaction}
+
+
+def _demo(key: str, lang: str, block_ids, severity, category, bbox=None, target="slide",
+          reason: dict | None = None, suggestion: dict | None = None) -> dict:
+    """메시지 카탈로그(messages.py)의 key.title/reason/suggestion/reaction 으로 지적을 만든다."""
+    return _demo_issue(block_ids, severity, category, m(lang, f"{key}.title"), m(lang, f"{key}.reason", **(reason or {})),
+                       m(lang, f"{key}.suggestion", **(suggestion or {})), m(lang, f"{key}.reaction"),
+                       bbox=bbox, target=target)

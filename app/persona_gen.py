@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 from . import providers
+from .messages import m
 from .personas import PersonaIn
 
 _TEXT_FIELDS = ["name", "icon", "age_group", "occupation", "organization", "role", "domain_knowledge",
@@ -26,13 +27,14 @@ SYSTEM = """당신은 발표·브리핑 자료의 청중 페르소나를 설계�
 - 모든 글은 한국어로 씁니다."""
 
 
-def generate(description: str) -> tuple[PersonaIn, str | None]:
+def generate(description: str, lang: str = "ko") -> tuple[PersonaIn, str | None]:
     """(페르소나 초안, 사용한 AI 엔진 이름 - 규칙 기반이면 None)."""
     description = description.strip()
     provider = providers.get_provider()  # 설정 오류는 ProviderError 로 전달
     if provider is None:
-        return rule_based(description), None
-    raw = provider.complete_json(SYSTEM, [{"type": "text", "text": f"설명: {description}"}], SCHEMA, max_tokens=4000)
+        return rule_based(description, lang), None
+    text = f"설명: {description}" + ("" if lang == "ko" else "\n\n" + m(lang, "ai.output_language"))
+    raw = provider.complete_json(SYSTEM, [{"type": "text", "text": text}], SCHEMA, max_tokens=4000)
     data = {f: str(raw.get(f) or "").strip() for f in _TEXT_FIELDS}
     data["name"] = (data["name"] or description)[:60]
     data["icon"] = (data["icon"] or "🙂")[:8]
@@ -65,16 +67,54 @@ _RULES = [
 ]
 
 
-def rule_based(description: str) -> PersonaIn:
+# 규칙 결과의 영어판: 직군 → (직군, 니즈, 선호, 우려)
+_RULES_EN = {
+    "연구·전문직": ("Research / professional", "Validity of the evidence and method", "Precise terms, sources, quantitative evidence",
+               "Exaggeration, numbers without sources"),
+    "경영·관리": ("Management", "Key conclusion, cost vs. benefit, decisions required", "One-page summary, conclusion first",
+              "Long background, unsupported numbers"),
+    "언론": ("Media", "News value, key numbers, impact on citizens", "Quotable sentences, clear dates",
+           "Contradictory numbers, blanks like 'TBD'"),
+    "은퇴": ("Retired", "Whether I qualify and where to apply", "Very large text, plain words, phone support",
+           "Small print, notices that only offer an app"),
+    "학생": ("Student", "How it relates to me and how to take part", "Short visual information, mobile",
+           "Boring wording, grown-up jargon"),
+    "학부모": ("Parent", "Impact on my child, schedule, cost", "Concrete examples, a timetable", "Safety, extra costs"),
+    "IT·개발": ("IT / software", "Architecture and feasibility", "Precise technical terms, diagrams",
+              "Vague technical claims, exaggeration"),
+    "공공기관": ("Public sector", "Legal basis, schedule, what's needed from us", "Official format, cited regulations",
+             "Unclear accountability"),
+}
+_RULES_EN_PATTERNS = [
+    (r"professor|researcher|phd|expert|reviewer", "연구·전문직"),
+    (r"executive|ceo|director|manager|decision", "경영·관리"),
+    (r"journalist|reporter|press|media", "언론"),
+    (r"senior|elderly|retired|grand(mother|father)|[6-9]0s", "은퇴"),
+    (r"student|teen", "학생"),
+    (r"parent|mom|dad|mother|father", "학부모"),
+    (r"developer|engineer|programmer|\bit\b", "IT·개발"),
+    (r"civil servant|official|government", "공공기관"),
+]
+
+
+def rule_based(description: str, lang: str = "ko") -> PersonaIn:
     head, *rest = [part.strip() for part in re.split(r"[,，;/]", description) if part.strip()] or ["새 페르소나"]
-    data = {"name": head[:30], "icon": "🙂", "extra": description, "personality": ", ".join(rest),
+    if len(head) > 40:  # 단어 중간에서 자르지 않는다
+        head = head[:40].rsplit(" ", 1)[0] if " " in head[:40] else head[:40]
+    data = {"name": head, "icon": "🙂", "extra": description, "personality": ", ".join(rest),
             "expertise_level": 2, "digital_literacy": 3}
-    age = re.search(r"([1-9]0)대", description)
+    age = re.search(r"([1-9]0)대", description) or re.search(r"\b([1-9]0)s\b", description)
     if age:
-        data["age_group"] = f"{age.group(1)}대"
+        data["age_group"] = f"{age.group(1)}대" if lang == "ko" else f"{age.group(1)}s"
+    english_hit = next((occ for pat, occ in _RULES_EN_PATTERNS if re.search(pat, description, re.I)), None)
     for pattern, icon, occupation, exp, digital, needs, prefs, concerns in _RULES:
-        if re.search(pattern, description):
+        if re.search(pattern, description) or occupation == english_hit:
             data.update(icon=icon, occupation=occupation, expertise_level=exp, digital_literacy=digital,
                         needs=needs, preferences=prefs, concerns=concerns)
+            if lang == "en":
+                occ, needs, prefs, concerns = _RULES_EN[occupation]
+                data.update(occupation=occ, needs=needs, preferences=prefs, concerns=concerns)
             break
+    if data["name"] == "새 페르소나" and lang == "en":
+        data["name"] = "New persona"
     return PersonaIn(**data)

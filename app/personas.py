@@ -111,6 +111,60 @@ PRESETS: list[Persona] = [
 ]
 
 
+# 기본 프리셋의 영어판 (언어를 영어로 고르면 이 값으로 보여주고 분석한다)
+PRESETS_EN: dict[str, dict] = {
+    DEFAULT_PERSONA_ID: dict(
+        name="General citizen", age_group="30s–50s", occupation="Office workers, small business owners, etc.",
+        organization="None", role="Beneficiary of the policy or service",
+        domain_knowledge="Everyday common sense; barely knows jargon or English acronyms",
+        personality="Busy and not very patient; slightly distrustful of government material",
+        needs="What gets better for me, from when, what I need to do, and what it costs",
+        preferences="Plain words, short sentences, large text, concrete examples and pictures",
+        concerns="Privacy, wasted taxes, hidden conditions, notices without contacts or how to apply",
+        context="Skims for 1–2 minutes on a phone or at a briefing"),
+    "busy-executive": dict(
+        name="Busy executive (decision maker)", age_group="50s", occupation="Management",
+        organization="Headquarters of a large company or agency", role="Budget and approval authority",
+        domain_knowledge="Fluent in business and financial metrics; not interested in technical detail",
+        personality="Wants the conclusion first; scrutinizes the basis for every number",
+        needs="Key conclusion, cost vs. benefit, risks, and the decision required of me",
+        preferences="One-page summary, conclusion first, comparison tables",
+        concerns="Unsupported numbers, long background, unclear accountability",
+        context="Reviews for 3 minutes right before a meeting"),
+    "domain-expert": dict(
+        name="Domain expert (reviewer)", age_group="40s", occupation="Researcher / professor",
+        organization="Research institute", role="External advisor / reviewer",
+        domain_knowledge="Latest trends and methods in the field",
+        personality="Critical; dislikes logical leaps and exaggeration",
+        needs="Validity of the method, data sources, what is new compared with existing work",
+        preferences="Precise terms, cited sources, quantitative evidence",
+        concerns="Inaccurate terminology, charts without sources, inflated expected benefits",
+        context="Reads closely as review material"),
+    "senior-citizen": dict(
+        name="Senior citizen", age_group="70s", occupation="Retired", organization="None",
+        role="User of welfare and public services", domain_knowledge="Barely knows loanwords or English acronyms",
+        personality="Reads slowly but gives up if it's complicated; prefers to call by phone",
+        needs="Whether I qualify, and where to go or whom to call to apply",
+        preferences="Very large text, high contrast, one message per screen",
+        concerns="Small print, notices that only offer an app or QR code, anything that feels like a scam",
+        context="Sees it as a printed notice or on a community-center board (presbyopia)"),
+    "journalist": dict(
+        name="Journalist", age_group="30s", occupation="Media", organization="Daily newspaper, city desk",
+        role="Covers press releases and briefings", domain_knowledge="Broad but shallow knowledge of policy",
+        personality="Looks for the one line that becomes a headline; sensitive to controversy",
+        needs="News value, key numbers, impact on citizens, room for counterarguments",
+        preferences="Clear numbers and dates, quotable sentences",
+        concerns="Misleading phrasing, contradictory numbers, blanks like 'TBD'",
+        context="Skims quickly right before deadline"),
+}
+
+
+def localize(persona: "Persona", lang: str) -> "Persona":
+    if lang == "en" and persona.builtin and persona.id in PRESETS_EN:
+        return persona.model_copy(update=PRESETS_EN[persona.id])
+    return persona
+
+
 def _path():
     return storage.DATA_DIR / "personas.json"
 
@@ -123,12 +177,12 @@ def _save_custom(items: list[Persona]) -> None:
     storage.write_json(_path(), [p.model_dump() for p in items])
 
 
-def list_personas() -> list[Persona]:
-    return PRESETS + _load_custom()
+def list_personas(lang: str = "ko") -> list[Persona]:
+    return [localize(p, lang) for p in PRESETS] + _load_custom()
 
 
-def get_persona(persona_id: str) -> Persona | None:
-    return next((p for p in list_personas() if p.id == persona_id), None)
+def get_persona(persona_id: str, lang: str = "ko") -> Persona | None:
+    return next((p for p in list_personas(lang) if p.id == persona_id), None)
 
 
 def create_persona(data: PersonaIn) -> Persona:

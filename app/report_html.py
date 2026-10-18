@@ -5,7 +5,9 @@ import base64
 from html import escape
 from pathlib import Path
 
-SEV = {"critical": "치명", "warning": "주의", "suggestion": "제안"}
+from .messages import category, m
+
+SEVERITIES = ("critical", "warning", "suggestion")
 
 CSS = """
 :root { --text:#1d2330; --muted:#6b7280; --line:#e3e6eb; --bg:#f5f6f8; --panel:#fff; --accent:#2348c7;
@@ -58,48 +60,52 @@ def _e(value) -> str:
     return escape(str(value or ""))
 
 
-def render(meta: dict, doc_path: Path, result: dict) -> str:
+def render(meta: dict, doc_path: Path, result: dict, lang: str = "ko") -> str:
+    def t(key, **kw):
+        return m(lang, f"r.{key}", **kw)
+
     o = result["overall"]
     persona = result["persona"]
     counts = o["counts"]
     pages_meta = {p["index"]: p for p in meta["pages"]}
+    who = f"{persona.get('icon') or ''} {persona['name']}".strip()
     parts = [
-        "<!doctype html><html lang='ko'><head><meta charset='utf-8'>",
+        f"<!doctype html><html lang='{lang}'><head><meta charset='utf-8'>",
         "<meta name='viewport' content='width=device-width, initial-scale=1'>",
         f"<title>WhoWillSee · {_e(meta['filename'])} · {_e(persona['name'])}</title><style>{CSS}</style></head><body><main>",
-        f"<h1>{_e(persona.get('icon'))} {_e(persona['name'])}의 눈으로 본 «{_e(meta['filename'])}»</h1>",
-        f"<div class='muted'>{_e(result.get('engine') or '데모 모드(규칙 기반)')} · {_e(result['created_at'])}</div>",
+        f"<h1>{_e(t('eyes', who=who, doc=meta['filename']))}</h1>",
+        f"<div class='muted'>{_e(result.get('engine') or t('demo'))} · {_e(result['created_at'])}</div>",
         "<section class='card summary'><div>",
-        f"<div class='score'>{o['score']}<small>전달력 (100점 만점)</small></div><div style='margin-top:8px'>",
-        "".join(f"<span class='pill {s}'>{SEV[s]} {counts[s]}</span>" for s in SEV),
+        f"<div class='score'>{o['score']}<small>{t('score')}</small></div><div style='margin-top:8px'>",
+        "".join(f"<span class='pill {s}'>{t('sev.' + s)} {counts[s]}</span>" for s in SEVERITIES),
         "</div></div><div>",
     ]
     if result.get("context"):
-        parts.append(f"<h3>자료 사용 상황</h3><div>{_e(result['context'])}</div>")
+        parts.append(f"<h3>{t('context')}</h3><div>{_e(result['context'])}</div>")
     if o.get("first_impression"):
-        parts.append(f"<h3>첫인상</h3><div>{_e(o['first_impression'])}</div>")
+        parts.append(f"<h3>{t('first')}</h3><div>{_e(o['first_impression'])}</div>")
     if o.get("summary"):
-        parts.append(f"<h3>종합 평가</h3><div>{_e(o['summary'])}</div>")
+        parts.append(f"<h3>{t('summary')}</h3><div>{_e(o['summary'])}</div>")
     if result.get("audience"):
-        rows = "".join(f"<li>{_e(m['icon'])} {_e(m['name'])} · 비중 {m['share']}% · {m['score']}점</li>"
-                       for m in result["audience"]["members"])
-        parts.append(f"<h3>구성원</h3><ul>{rows}</ul>")
+        rows = "".join(f"<li>{_e(t('member', **mem))}</li>" for mem in result["audience"]["members"])
+        parts.append(f"<h3>{t('members')}</h3><ul>{rows}</ul>")
     timing = o.get("timing")
     if timing:
-        target = f" / 목표 {timing['target_minutes']:g}분" if timing.get("target_minutes") else ""
-        basis = "실제 {0:g}분{1} (녹음 기준)" if timing.get("measured") else "예상 {0:g}분{1} (대본 기준)"
-        parts.append(f"<h3>발표 시간</h3><div>{basis.format(timing['est_minutes'], target)}</div>")
+        target = t("timing.target", target=f"{timing['target_minutes']:g}") if timing.get("target_minutes") else ""
+        line = t("timing.measured" if timing.get("measured") else "timing.est", est=f"{timing['est_minutes']:g}", target=target)
+        parts.append(f"<h3>{t('timing')}</h3><div>{_e(line)}</div>")
     delivery = o.get("delivery")
     if delivery:
-        rate = f"말 속도 {delivery['rate']}자/분 · " if delivery.get("rate") else ""
-        top = ", ".join(f"{_e(k)} {v}" for k, v in list((delivery.get("fillers") or {}).items())[:3])
-        parts.append(f"<h3>말하기</h3><div>{rate}말버릇 {delivery['filler_total']}회"
-                     f"{f' ({top})' if top else ''} · 긴 멈춤 {delivery['long_pauses']}회</div>")
-    for title, items in (("우선 고칠 것", o.get("top_fixes")), ("잘된 점", o.get("strengths"))):
+        rate = t("delivery.rate", rate=delivery["rate"]) if delivery.get("rate") else ""
+        top = ", ".join(f"{k} {v}" for k, v in list((delivery.get("fillers") or {}).items())[:3])
+        line = t("delivery.line", rate=rate, fillers=delivery["filler_total"], top=f" ({top})" if top else "",
+                 pauses=delivery["long_pauses"])
+        parts.append(f"<h3>{t('delivery')}</h3><div>{_e(line)}</div>")
+    for title, items in ((t("fixes"), o.get("top_fixes")), (t("strengths"), o.get("strengths"))):
         if items:
             parts.append(f"<h3>{title}</h3><ol>{''.join(f'<li>{_e(i)}</li>' for i in items)}</ol>")
     parts.append("</div></section>")
-    parts.append(_video_section(o.get("video"), doc_path))
+    parts.append(_video_section(o.get("video"), doc_path, lang))
 
     for rp in result["pages"]:
         pm = pages_meta.get(rp["page"])
@@ -119,33 +125,37 @@ def render(meta: dict, doc_path: Path, result: dict) -> str:
                 f"width:{b['w'] * 100:.2f}%;height:{b['h'] * 100:.2f}%'>"
                 f"<a class='num' style='margin-left:{same_box[key] * 24}px' href='#m{i['n']}'>{i['n']}</a></div>")
         boxes = "".join(boxes)
-        memos = "".join(_memo(i) for i in rp["issues"]) or "<div class='muted'>지적사항 없음</div>"
+        memos = "".join(_memo(i, lang) for i in rp["issues"]) or f"<div class='muted'>{t('no_issues')}</div>"
         comment = f"<p class='muted'>{_e(rp['page_comment'])}</p>" if rp.get("page_comment") else ""
+        title = t("page", n=rp["page"])
         parts.append(
-            f"<section class='card'><h2>페이지 {rp['page']}</h2><div class='page'><div>"
-            f"<div class='wrap'><img alt='페이지 {rp['page']}' src='data:image/png;base64,{img}'>{boxes}</div>{comment}"
+            f"<section class='card'><h2>{title}</h2><div class='page'><div>"
+            f"<div class='wrap'><img alt='{title}' src='data:image/png;base64,{img}'>{boxes}</div>{comment}"
             f"</div><div>{memos}</div></div></section>")
-    parts.append("<footer>WhoWillSee 로 만든 리포트입니다. 결과는 실제 사람의 반응이 아니라 페르소나 시뮬레이션입니다.</footer>")
+    parts.append(f"<footer>{t('footer')}</footer>")
     parts.append("</main></body></html>")
     return "".join(parts)
 
 
-def _memo(i: dict) -> str:
-    tag = "<span class='tag'>🎤 대본</span> " if i.get("target") == "script" else ""
+def _memo(i: dict, lang: str = "ko") -> str:
+    def t(key, **kw):
+        return m(lang, f"r.{key}", **kw)
+
+    tag = f"<span class='tag'>{t('script_tag')}</span> " if i.get("target") == "script" else ""
     who = ""
     if i.get("voices"):
-        names = ", ".join(f"{_e(v['icon'])} {_e(v['name'])}" for v in i["voices"])
-        who = f"<div class='who'>👥 청중의 {i['share']}%가 지적 · {names}</div>"
-    suggestion = f"<p><span class='k'>이렇게 고치세요</span><br>{_e(i['suggestion'])}</p>" if i.get("suggestion") else ""
+        names = ", ".join(f"{v['icon']} {v['name']}" for v in i["voices"])
+        who = f"<div class='who'>{_e(t('share', share=i['share'], names=names))}</div>"
+    suggestion = f"<p><span class='k'>{t('fix')}</span><br>{_e(i['suggestion'])}</p>" if i.get("suggestion") else ""
     reaction = f"<p class='reaction'>💭 “{_e(i['persona_reaction'])}”</p>" if i.get("persona_reaction") else ""
     return (f"<div class='memo {i['severity']}' id='m{i['n']}'>{tag}<b>#{i['n']} {_e(i['title'])}</b>"
-            f"<div class='muted'>{SEV[i['severity']]} · {_e(i['category'])}</div>{who}"
-            f"<p><span class='k'>왜 문제인가</span><br>{_e(i['reason'])}</p>{suggestion}{reaction}</div>")
+            f"<div class='muted'>{t('sev.' + i['severity'])} · {_e(category(lang, i['category']))}</div>{who}"
+            f"<p><span class='k'>{t('why')}</span><br>{_e(i['reason'])}</p>{suggestion}{reaction}</div>")
 
 
-def video_line(v: dict) -> str:
-    return (f"정면을 본 장면 {v['frontal_ratio'] * 100:.0f}% · 화면 안 {v['visible_ratio'] * 100:.0f}% · "
-            f"정면을 안 본 가장 긴 구간 {v['longest_away_seconds']:.0f}초 · 밝기 {v['brightness']:.2f}")
+def video_line(v: dict, lang: str = "ko") -> str:
+    return m(lang, "r.video.line", frontal=f"{v['frontal_ratio'] * 100:.0f}", visible=f"{v['visible_ratio'] * 100:.0f}",
+             away=f"{v['longest_away_seconds']:.0f}", bright=f"{v['brightness']:.2f}")
 
 
 def nearest_frame(v: dict, at: float) -> dict | None:
@@ -153,7 +163,10 @@ def nearest_frame(v: dict, at: float) -> dict | None:
     return min(frames, key=lambda k: abs(k["t"] - at)) if frames else None
 
 
-def _video_section(v: dict | None, doc_path: Path) -> str:
+def _video_section(v: dict | None, doc_path: Path, lang: str = "ko") -> str:
+    def t(key, **kw):
+        return m(lang, f"r.{key}", **kw)
+
     if not v:
         return ""
     items = []
@@ -162,13 +175,16 @@ def _video_section(v: dict | None, doc_path: Path) -> str:
         img = ""
         if frame and (doc_path / "video" / frame["image"]).exists():
             data = base64.standard_b64encode((doc_path / "video" / frame["image"]).read_bytes()).decode()
-            img = f"<img alt='{frame['t']:.0f}초 장면' style='width:160px;border-radius:6px;float:right;margin-left:10px' src='data:image/jpeg;base64,{data}'>"
+            alt = t("frame", n=f"{frame['t']:.0f}")
+            img = (f"<img alt='{alt}' style='width:160px;border-radius:6px;float:right;margin-left:10px' "
+                   f"src='data:image/jpeg;base64,{data}'>")
+        at = t("seconds", n=f"{f['at_seconds']:.0f}")
         items.append(f"<div class='memo {f['severity']}'>{img}<b>{_e(f['n'])} {_e(f['title'])}</b>"
-                     f"<div class='muted'>{SEV[f['severity']]} · {_e(f['category'])} · {f['at_seconds']:.0f}초</div>"
-                     f"<p><span class='k'>왜 문제인가</span><br>{_e(f['reason'])}</p>"
-                     f"<p><span class='k'>이렇게 고치세요</span><br>{_e(f['suggestion'])}</p>"
+                     f"<div class='muted'>{t('sev.' + f['severity'])} · {_e(category(lang, f['category']))} · {at}</div>"
+                     f"<p><span class='k'>{t('why')}</span><br>{_e(f['reason'])}</p>"
+                     f"<p><span class='k'>{t('fix')}</span><br>{_e(f['suggestion'])}</p>"
                      + (f"<p class='reaction'>💭 “{_e(f['persona_reaction'])}”</p>" if f.get("persona_reaction") else "")
                      + "<div style='clear:both'></div></div>")
-    body = "".join(items) or "<div class='muted'>눈에 띄는 문제가 없습니다.</div>"
-    return (f"<section class='card'><h2>🎥 발표 모습</h2><div class='muted'>영상 '{_e(v.get('filename'))}' · "
-            f"{_e(video_line(v))} (정면 얼굴 검출 기반의 대략적 추정)</div><div style='margin-top:10px'>{body}</div></section>")
+    body = "".join(items) or f"<div class='muted'>{t('video.none')}</div>"
+    return (f"<section class='card'><h2>{t('video')}</h2><div class='muted'>{_e(t('video.file', name=v.get('filename')))} · "
+            f"{_e(video_line(v, lang))} {t('video.note')}</div><div style='margin-top:10px'>{body}</div></section>")
