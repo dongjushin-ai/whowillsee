@@ -1,0 +1,23 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install LibreOffice (PPT 변환 테스트용)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-impress
+      - name: Install Python packages
+        run: pip install -r requirements.txt
+      - name: Install Chromium (HTML 변환 테스트용)
+        run: python -m playwright install --with-deps chromium
+      - name: Run tests
+        run: python -m pytest -q

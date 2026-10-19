@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WhoWillSee</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>👁️</text></svg>">
+  <link rel="stylesheet" href="/static/style.css">
+  <script>
+    // 첫 화면이 그려지기 전에 저장된 테마를 적용해 깜빡임을 막는다
+    try { const t = localStorage.getItem("whowillsee.theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (_) {}
+  </script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">👁️ <b>WhoWillSee</b> <span class="tagline">누가 보느냐에 따라 자료는 다르게 읽힌다</span></div>
+  <nav class="nav" id="nav">
+    <a href="#analyze" data-view="analyze">분석</a>
+    <a href="#dashboard" data-view="dashboard">대시보드</a>
+    <a href="#settings" data-view="settings">AI 연결</a>
+  </nav>
+  <div class="top-right">
+    <select id="lang-select" class="theme-btn" aria-label="Language / 언어">
+      <option value="ko">한국어</option>
+      <option value="en">English</option>
+    </select>
+    <button type="button" id="theme-btn" class="theme-btn">🌓 자동</button>
+    <a id="mode-badge" class="badge" href="#settings"></a>
+  </div>
+</header>
+
+<div id="ai-banner" class="ai-banner" data-i18n-html="banner" hidden>
+  AI가 연결되지 않아 <b>데모 모드</b>(규칙 기반)로 분석합니다. 내 Claude·OpenAI·Gemini·Ollama 등을 연결하면 페르소나가 직접 자료를 읽고 평가합니다.
+  <a href="#settings">AI 연결하기 →</a>
+</div>
+
+<div class="layout" id="view-analyze">
+  <aside class="sidebar">
+    <section>
+      <h2><span class="step">1</span> 누가 보나요? <small>(여러 명 선택 가능)</small></h2>
+      <div class="sub-h">청중 그룹 <small class="muted">· 실제 청중 구성 비율대로</small></div>
+      <div id="audience-list" class="audience-list"></div>
+      <div class="sub-h">개별 페르소나</div>
+      <div id="persona-list" class="persona-list"></div>
+      <button id="new-persona" class="btn ghost full">+ 새 페르소나 만들기</button>
+    </section>
+
+    <section>
+      <h2><span class="step">2</span> 자료 올리기</h2>
+      <label id="dropzone" class="dropzone">
+        <input id="file-input" type="file" hidden
+               accept=".pdf,.ppt,.pptx,.odp,.key,.doc,.docx,.odt,.html,.htm,.png,.jpg,.jpeg,.webp,.gif,.bmp">
+        <div class="dz-icon">📄</div>
+        <div>파일을 끌어다 놓거나 <u>클릭</u></div>
+        <small>PDF · PPT/PPTX · DOCX · HTML · 이미지</small>
+      </label>
+      <form id="url-form" class="url-form">
+        <input id="url-input" type="url" placeholder="또는 웹페이지 URL (https://…)">
+        <button class="btn ghost" type="submit">가져오기</button>
+      </form>
+      <div id="doc-list" class="doc-list"></div>
+    </section>
+
+    <section>
+      <h2><span class="step">3</span> 어떤 상황인가요? <small>(선택)</small></h2>
+      <textarea id="context-input" rows="3"
+                placeholder="예) 구청 주민설명회에서 10분 발표, 질의응답 있음. 목적은 사업 이해와 참여 독려."></textarea>
+      <button id="analyze-btn" class="btn primary full" disabled>분석 시작</button>
+      <div id="progress" class="progress"></div>
+    </section>
+  </aside>
+
+  <main class="main">
+    <div id="empty" class="empty">
+      <h1>자료를 청중의 눈으로 미리 읽어보세요</h1>
+      <ol data-i18n-html="empty">
+        <li>왼쪽에서 <b>청중(페르소나)</b>을 고르세요. 기본은 <b>일반 시민</b>이고, 직군·소속·성격·니즈·취향·전문성을 직접 설정한 페르소나를 만들 수도 있습니다.</li>
+        <li>발표 자료, 브리핑, PPT, PDF, HTML, 이미지를 올리세요.</li>
+        <li><b>분석 시작</b>을 누르면 그 사람이 막히거나 오해할 지점에 <span class="red">빨간 박스</span>와 이유 메모가 붙습니다.</li>
+      </ol>
+    </div>
+
+    <div id="viewer" class="viewer" hidden>
+      <div class="doc-head">
+        <div>
+          <div id="doc-title" class="doc-title"></div>
+          <div id="doc-sub" class="muted"></div>
+        </div>
+        <div class="exports">
+          <button type="button" class="btn" id="script-btn" title="발표하면서 말할 내용을 함께 평가합니다">🎤 발표 대본</button>
+          <label class="btn" title="리허설 녹음을 받아써서 실제 대본·발표 시간·말버릇을 잽니다">🎙 녹음 올리기
+            <input id="recording-input" type="file" hidden accept=".mp3,.m4a,.wav,.webm,.ogg,.mp4,.mpeg,.mpga,.flac,.aac,audio/*">
+          </label>
+          <label class="btn" title="리허설 영상을 올리면 시선·자세·화면 구성과 말하기를 함께 봅니다">🎥 영상 올리기
+            <input id="video-input" type="file" hidden accept=".mp4,.mov,.webm,.mkv,.m4v,.avi,video/*">
+          </label>
+          <label class="btn" title="고친 자료를 올리면 이 버전과 비교합니다">⬆ 수정본 올리기
+            <input id="version-input" type="file" hidden
+                   accept=".pdf,.ppt,.pptx,.odp,.key,.doc,.docx,.odt,.html,.htm,.png,.jpg,.jpeg,.webp,.gif,.bmp">
+          </label>
+          <span id="exports" class="exports"></span>
+        </div>
+      </div>
+      <nav id="tabs" class="tabs"></nav>
+      <div id="overall" class="overall"></div>
+      <div id="compare" class="compare" hidden></div>
+      <div id="video-panel" class="video-panel" hidden></div>
+      <div class="filters" id="filters"></div>
+      <div class="split">
+        <div id="pages" class="pages"></div>
+        <aside id="memos" class="memos"></aside>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div id="view-dashboard" class="page-view" hidden>
+  <div id="dashboard"></div>
+</div>
+
+<div id="view-settings" class="page-view" hidden>
+  <div class="settings">
+    <h1>AI 연결</h1>
+    <p class="muted" data-i18n-html="settings_intro">WhoWillSee는 특정 AI 계정에 묶여 있지 않습니다. 사용하는 사람이 자기 AI를 연결하세요.
+      입력한 키는 이 서버의 <code>data/settings.json</code>에만 저장되고(깃에 올라가지 않음), 화면에는 일부만 표시됩니다.</p>
+    <div id="settings-locked" class="note warn" hidden>이 서버는 관리자가 AI 설정을 잠가 두었습니다 (WHOWILLSEE_LOCK_SETTINGS).</div>
+    <form id="settings-form">
+      <fieldset class="provider-cards" id="provider-cards"></fieldset>
+
+      <div class="field-group" data-for="openai_compatible">
+        <label>서비스
+          <select name="preset" id="preset-select"></select>
+        </label>
+        <label>API 주소 (Base URL)
+          <input name="base_url" id="base-url" placeholder="https://…/v1">
+        </label>
+      </div>
+
+      <div class="field-group" data-for="anthropic openai_compatible">
+        <label>모델
+          <input name="model" id="model-input" autocomplete="off">
+          <small id="model-hint" class="muted"></small>
+        </label>
+        <label><span>API 키 <a id="key-link" target="_blank" rel="noopener" class="muted"></a></span>
+          <input name="api_key" id="key-input" type="password" autocomplete="off" placeholder="키를 입력하세요">
+          <small id="key-state" class="muted"></small>
+        </label>
+      </div>
+
+      <div class="field-group" data-for="anthropic">
+        <label>분석 깊이 (effort)
+          <select name="effort" id="effort-select">
+            <option value="">모델 기본값</option>
+            <option value="low">low · 빠르고 저렴</option>
+            <option value="medium">medium · 균형 (추천)</option>
+            <option value="high">high · 꼼꼼함</option>
+            <option value="xhigh">xhigh</option>
+            <option value="max">max · 가장 꼼꼼, 느림</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="settings-actions">
+        <button type="button" class="btn" id="test-btn">연결 테스트</button>
+        <button type="submit" class="btn primary">저장</button>
+      </div>
+      <div id="settings-msg" class="note" hidden></div>
+    </form>
+    <h2 class="settings-sub">🎙 음성 인식 <small class="muted">(발표 녹음 분석용, 선택)</small></h2>
+    <p class="muted">리허설 녹음을 올리면 받아써서 페이지별 실제 대본과 실제 발표 시간·말 속도·말버릇을 잽니다.
+      OpenAI 호환 받아쓰기 API(OpenAI Whisper, Groq, 내 컴퓨터의 Whisper 서버 등)를 연결하세요.</p>
+    <form id="speech-form">
+      <label class="switch"><input type="checkbox" name="enabled" id="speech-enabled"> 음성 인식 사용</label>
+      <div class="field-group" id="speech-fields">
+        <label>서비스<select name="preset" id="speech-preset"></select></label>
+        <label>API 주소 (Base URL)<input name="base_url" id="speech-base" placeholder="https://…/v1"></label>
+        <label>모델<input name="model" id="speech-model" autocomplete="off"></label>
+        <label><span>API 키 <a id="speech-key-link" target="_blank" rel="noopener" class="muted"></a></span>
+          <input name="api_key" id="speech-key" type="password" autocomplete="off" placeholder="키를 입력하세요">
+          <small id="speech-key-state" class="muted"></small></label>
+        <label>언어<input name="language" id="speech-lang" placeholder="ko"></label>
+      </div>
+      <div class="settings-actions">
+        <button type="button" class="btn" id="speech-test-btn">연결 테스트</button>
+        <button type="submit" class="btn primary">저장</button>
+      </div>
+      <div id="speech-msg" class="note" hidden></div>
+    </form>
+    <details class="help">
+      <summary>환경 변수로 설정하기 (서버 운영자용)</summary>
+      <p data-i18n-html="env_help">화면에서 저장한 설정이 없으면 환경 변수를 씁니다. <code>ANTHROPIC_API_KEY</code>가 있으면 Claude,
+        <code>OPENAI_API_KEY</code> + <code>OPENAI_BASE_URL</code> + <code>WHOWILLSEE_MODEL</code>이 있으면 OpenAI 호환 API를 씁니다.
+        여러 사람이 쓰는 서버라면 <code>WHOWILLSEE_LOCK_SETTINGS=1</code>로 화면에서 설정을 바꾸지 못하게 잠그세요.</p>
+    </details>
+  </div>
+</div>
+
+<dialog id="script-dialog" class="wide">
+  <form id="script-form" method="dialog">
+    <h2>🎤 발표 대본</h2>
+    <p class="muted">각 페이지를 띄워 놓고 말할 내용을 적으세요. 다시 분석하면 청중이 "귀로 들었을 때" 문제가 되는 부분도 지적하고, 예상 발표 시간을 계산합니다.
+      PPTX의 발표자 노트는 자동으로 채워집니다.</p>
+    <div id="script-source" class="note" hidden></div>
+    <div class="script-top">
+      <label>목표 발표 시간 <input name="target_minutes" type="number" min="0.5" max="600" step="0.5" placeholder="예) 10"> 분</label>
+      <span id="script-estimate" class="muted"></span>
+    </div>
+    <div id="script-pages" class="script-pages"></div>
+    <div class="dialog-actions">
+      <button type="button" class="btn ghost" id="script-cancel">취소</button>
+      <button type="submit" class="btn primary">저장</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="audience-dialog">
+  <form id="audience-form" method="dialog">
+    <h2 id="audience-dialog-title">새 청중 그룹</h2>
+    <p class="muted">실제 발표장에 어떤 사람들이 어떤 비율로 있는지 정하세요. 비율대로 종합 점수를 내고, 여러 청중이 함께 걸려 넘어지는 문제부터 보여줍니다.</p>
+    <div class="grid">
+      <label class="span2">이름 *<input name="name" required maxlength="60" placeholder="예) 학부모 설명회"></label>
+      <label>아이콘<input name="icon" maxlength="8" placeholder="👥"></label>
+      <label class="span2">기본 발표 상황<textarea name="context" rows="2" placeholder="예) 학교 강당, 30분 설명 후 질의응답"></textarea></label>
+    </div>
+    <div class="sub-h" style="margin-top:14px">구성원과 비중</div>
+    <div id="audience-members" class="audience-members"></div>
+    <small id="audience-sum" class="muted"></small>
+    <div class="dialog-actions">
+      <button type="button" class="btn ghost danger" id="audience-delete" hidden>삭제</button>
+      <span style="flex:1"></span>
+      <button type="button" class="btn ghost" id="audience-cancel">취소</button>
+      <button type="submit" class="btn primary">저장</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="persona-dialog">
+  <form id="persona-form" method="dialog">
+    <h2 id="persona-dialog-title">새 페르소나</h2>
+    <div class="autofill">
+      <label for="autofill-input">✨ 한 줄로 설명하면 나머지를 채워드려요</label>
+      <div class="autofill-row">
+        <input id="autofill-input" placeholder="예) 예산 결재권을 가진 50대 구청 국장, 숫자에 깐깐함">
+        <button type="button" class="btn" id="autofill-btn">자동 채우기</button>
+      </div>
+      <small id="autofill-msg" class="muted"></small>
+    </div>
+    <div class="grid">
+      <label class="span2">이름 *<input name="name" required maxlength="60" placeholder="예) 30대 맞벌이 학부모"></label>
+      <label>아이콘<input name="icon" maxlength="8" placeholder="🙂"></label>
+      <label>연령대<input name="age_group" placeholder="예) 30대"></label>
+      <label>직군<input name="occupation" placeholder="예) 간호사, 개발자, 자영업"></label>
+      <label>소속<input name="organization" placeholder="예) 대학병원, 스타트업, 구청"></label>
+      <label class="span2">직위·역할<input name="role" placeholder="예) 예산 승인권자, 서비스 이용자, 심사위원"></label>
+      <label>자료 주제 전문성 <output data-for="expertise_level"></output>
+        <input name="expertise_level" type="range" min="1" max="5" value="2"></label>
+      <label>디지털 숙련도 <output data-for="digital_literacy"></output>
+        <input name="digital_literacy" type="range" min="1" max="5" value="3"></label>
+      <label class="span2">잘 아는 분야<input name="domain_knowledge" placeholder="예) 재무 지표는 능숙, IT 용어는 모름"></label>
+      <label class="span2">성격·성향<textarea name="personality" rows="2" placeholder="예) 꼼꼼하고 의심이 많음, 결론부터 듣고 싶어함"></textarea></label>
+      <label class="span2">니즈·목적<textarea name="needs" rows="2" placeholder="예) 우리 아이 학교에 언제부터 적용되는지, 비용 부담이 있는지"></textarea></label>
+      <label class="span2">선호·취향<textarea name="preferences" rows="2" placeholder="예) 그림과 예시, 짧은 문장, 표보다는 그래프"></textarea></label>
+      <label class="span2">우려·민감한 점<textarea name="concerns" rows="2" placeholder="예) 개인정보, 추가 비용, 책임 회피성 표현"></textarea></label>
+      <label class="span2">자료를 접하는 상황<input name="context" placeholder="예) 퇴근길 스마트폰으로 2분, 설명회 현장 스크린"></label>
+      <label class="span2">기타<textarea name="extra" rows="2"></textarea></label>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" class="btn ghost" id="persona-cancel">취소</button>
+      <button type="submit" class="btn primary">저장</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+<div id="tooltip" class="tooltip" hidden></div>
+<script src="/static/i18n.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
