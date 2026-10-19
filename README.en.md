@@ -42,3 +42,7 @@ docker run -p 8000:8000 -v whowillsee-data:/data whowillsee
 - Built-in demo rules (jargon lists, filler words) are tuned for Korean material; with an AI connected, any language works.
 
 See the Korean [README](README.md) for the full feature guide, environment variables and API reference.
+
+## License
+
+[MIT](LICENSE)
